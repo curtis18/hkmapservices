@@ -1,0 +1,91 @@
+[
+  {
+    "id": "district",
+    "title": "District Boundary",
+    "service": "had_rcd_1634523272907_75218",
+    "crs": "EPSG:2326",
+    "geometry": "polygon",
+    "marker": "",
+    "color": "180,30,45,255",
+    "name_fields": {"en": "NAME_EN", "tc": "NAME_TC", "sc": "NAME_TC"},
+    "address_fields": {},
+    "district_fields": {}
+  },
+  {
+    "id": "libraries",
+    "title": "Libraries",
+    "service": "lcsd_rcd_1629267205214_44807",
+    "crs": "EPSG:2326",
+    "geometry": "point",
+    "marker": "circle",
+    "color": "60,70,137,255",
+    "name_fields": {"en": "NameEN", "tc": "NameTC", "sc": "NameTC"},
+    "address_fields": {"en": "AddressEN", "tc": "AddressTC", "sc": "AddressTC"},
+    "district_fields": {"en": "DistrictEN", "tc": "DistrictTC", "sc": "DistrictTC"}
+  },
+  {
+    "id": "fitness",
+    "title": "Fitness Rooms",
+    "service": "lcsd_rcd_1629267205215_5008",
+    "crs": "EPSG:2326",
+    "geometry": "point",
+    "marker": "circle",
+    "color": "106,132,58,255",
+    "name_fields": {"en": "NameEN", "tc": "NameTC", "sc": "NameTC"},
+    "address_fields": {"en": "AddressEN", "tc": "AddressTC", "sc": "AddressTC"},
+    "district_fields": {"en": "DistrictEN", "tc": "DistrictTC", "sc": "DistrictTC"}
+  },
+  {
+    "id": "outdoor",
+    "title": "Outdoor Fitness Equipment",
+    "service": "lcsd_rcd_1670389505454_91091",
+    "crs": "EPSG:4326",
+    "geometry": "point",
+    "marker": "square",
+    "color": "230,120,30,255",
+    "name_fields": {"en": "Name_en", "tc": "Name_cn", "sc": "Name_cn"},
+    "address_fields": {"en": "Address_en", "tc": "Address_tc", "sc": "Address_sc"},
+    "district_fields": {"en": "District_en", "tc": "District_tc", "sc": "District_sc"}
+  },
+  {
+    "id": "traffic",
+    "title": "Traffic Detectors",
+    "service": "td_rcd_1671693191724_92214",
+    "crs": "EPSG:2326",
+    "geometry": "point",
+    "marker": "diamond",
+    "color": "35,121,153,255",
+    "name_fields": {"en": "Road_EN", "tc": "Road_TC", "sc": "Road_SC"},
+    "address_fields": {},
+    "district_fields": {"en": "District", "tc": "District", "sc": "District"},
+    "tip_fields": ["AID_ID_Number", "Direction"]
+  },
+  {
+    "id": "water",
+    "title": "Water Dispensers",
+    "service": "lcsd_rcd_1671530248519_33416",
+    "crs": "EPSG:4326",
+    "geometry": "point",
+    "marker": "triangle",
+    "color": "150,52,33,255",
+    "name_fields": {
+      "en": "Name_of_Building_or_Facility_EN",
+      "tc": "Name_of_Building_or_Facility_TC",
+      "sc": "Name_of_Building_or_Facility_SC"
+    },
+    "address_fields": {"en": "Street_EN", "tc": "Street_TC", "sc": "Street_SC"},
+    "district_fields": {"en": "District_EN", "tc": "District_TC", "sc": "District_SC"}
+  },
+  {
+    "id": "barbecue",
+    "title": "Barbecue Sites",
+    "service": "afcd_rcd_1635132752214_22438",
+    "crs": "EPSG:2326",
+    "geometry": "point",
+    "marker": "star",
+    "color": "168,63,97,255",
+    "name_fields": {"en": "SITE_NAME_EN", "tc": "SITE_NAME_TC", "sc": "SITE_NAME_TC"},
+    "address_fields": {"en": "BARBECUE_AREA_EN", "tc": "BARBECUE_AREA_TC", "sc": "BARBECUE_AREA_TC"},
+    "district_fields": {"en": "COUNTRY_PARK_EN", "tc": "COUNTRY_PARK_TC", "sc": "COUNTRY_PARK_TC"}
+  }
+]

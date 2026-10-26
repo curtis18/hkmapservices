@@ -1,0 +1,5 @@
+__pycache__/
+*.py[cod]
+*.aux.xml
+.qgis2/
+*.zip
