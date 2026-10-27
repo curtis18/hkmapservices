@@ -43,6 +43,13 @@ class TransformTests(unittest.TestCase):
         self.assertTrue(text.startswith("Point ID,Northing (m),Easting (m),Latitude,Longitude,Remarks"))
         self.assertEqual(loaded, [transform.TEMPLATE_RECORD])
 
+    def test_csv_row_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = str(Path(directory) / "points.csv")
+            transform.write_csv_records(path, [transform.TEMPLATE_RECORD] * 3)
+            loaded = transform.read_csv_records(path, 2)
+        self.assertEqual(len(loaded), 2)
+
     def test_csv_encodings(self) -> None:
         traditional = "\u5099\u8a3b"
         simplified = "\u5907\u6ce8"

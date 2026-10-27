@@ -12,14 +12,57 @@ from qgis.core import (
 from .config import HK1980, WGS84
 
 
+_TRANSFORMS = {}
+_PROJECT_CRS = None
+_CRS_HOOKED = False
+
+
 def transform_xy(point: QgsPointXY, source, destination) -> QgsPointXY:
     """Transform one point with the project coordinate context."""
     if isinstance(source, str):
         source = QgsCoordinateReferenceSystem(source)
     if isinstance(destination, str):
         destination = QgsCoordinateReferenceSystem(destination)
-    transform = QgsCoordinateTransform(source, destination, QgsProject.instance())
+    transform = _cached_transform(source, destination)
     return transform.transform(point)
+
+
+def _cached_transform(source, destination):
+    """Reuse one transform until the project CRS changes."""
+    _watch_project_crs()
+    project = QgsProject.instance()
+    current = project.crs().authid()
+    global _PROJECT_CRS
+    if current != _PROJECT_CRS:
+        _TRANSFORMS.clear()
+        _PROJECT_CRS = current
+    key = (_crs_key(source), _crs_key(destination))
+    transform = _TRANSFORMS.get(key)
+    if transform is None:
+        transform = QgsCoordinateTransform(source, destination, project)
+        _TRANSFORMS[key] = transform
+    return transform
+
+
+def _crs_key(crs) -> str:
+    authid = crs.authid()
+    if authid:
+        return authid
+    return crs.toWkt()
+
+
+def _watch_project_crs() -> None:
+    global _CRS_HOOKED
+    if _CRS_HOOKED:
+        return
+    QgsProject.instance().crsChanged.connect(_clear_transforms)
+    _CRS_HOOKED = True
+
+
+def _clear_transforms() -> None:
+    global _PROJECT_CRS
+    _TRANSFORMS.clear()
+    _PROJECT_CRS = None
 
 
 def convert_values(

@@ -25,7 +25,7 @@ from qgis.core import (
     QgsVectorLayerSimpleLabeling,
     QgsVectorTileLayer,
 )
-from qgis.PyQt.QtGui import QColor, QFont
+from qgis.PyQt.QtGui import QColor, QFont, QFontDatabase
 
 from .config import HK1980, WEB_MERCATOR
 from .catalog import (
@@ -68,6 +68,8 @@ def repair_grid_sources() -> None:
     base_url = ""
     if any(layer.customProperty("hkmapservices/vector_path") for layer in layers):
         base_url = proxy_base_url()
+    else:
+        stop_proxy()
     for layer in layers:
         key = layer.customProperty("hkmapservices/grid_xml")
         if key:
@@ -92,28 +94,34 @@ def add_basemap(iface, request: BasemapRequest) -> bool:
     """Add one basemap group, with optional place-name labels and no datasets."""
     project = QgsProject.instance()
     root = project.layerTreeRoot()
-    group = root.insertGroup(0, group_title(request))
     errors = []
     added = []
-
-    basemap = _make_basemap(request)
+    try:
+        basemap = _make_basemap(request)
+    except OSError as exc:
+        _report(iface, [], [str(exc)], "")
+        return False
     if basemap.isValid():
         added.append(basemap)
     else:
         errors.append(f"{basemap.name()}: {_layer_error(basemap)}")
 
     if request.label_language:
-        labels = _make_labels(request)
-        if labels.isValid():
+        try:
+            labels = _make_labels(request)
+        except OSError as exc:
+            errors.append(str(exc))
+            labels = None
+        if labels is not None and labels.isValid():
             added.append(labels)
-        else:
+        elif labels is not None:
             errors.append(f"{labels.name()}: {_layer_error(labels)}")
 
     if not added:
-        root.removeChildNode(group)
         _report(iface, added, errors, "")
         return False
 
+    group = root.insertGroup(0, group_title(request))
     _commit_group(project, group, added)
     if request.set_project_crs:
         project.setCrs(QgsCoordinateReferenceSystem(project_crs_authid(request.crs)))
@@ -131,21 +139,24 @@ def add_datasets(iface, request) -> bool:
         _report(iface, [], ["Select at least one dataset."], "")
         return False
 
-    group = root.insertGroup(0, DATASET_GROUP_TITLE)
     errors = []
     added = []
     for dataset in chosen:
-        layer = _make_dataset(dataset, request.name_language)
+        try:
+            layer = _make_dataset(dataset, request.name_language)
+        except OSError as exc:
+            errors.append(str(exc))
+            continue
         if layer.isValid():
             added.append(layer)
         else:
             errors.append(f"{layer.name()}: {_layer_error(layer)}")
 
     if not added:
-        root.removeChildNode(group)
         _report(iface, added, errors, "")
         return False
 
+    group = root.insertGroup(0, DATASET_GROUP_TITLE)
     _commit_group(project, group, added)
     _report(iface, added, errors, group.name())
     return True
@@ -331,11 +342,70 @@ def _style_dataset(layer, dataset, language: str) -> None:
     else:
         raise ValueError(f"Unknown geometry {dataset.geometry!r}.")
     layer.setRenderer(QgsSingleSymbolRenderer(symbol))
-    _label_layer(layer, name_field, dataset.geometry)
+    _label_layer(layer, name_field, dataset.geometry, language)
     _set_map_tip(layer, dataset, language, name_field)
 
 
-def _label_layer(layer, field_name: str, geometry: str) -> None:
+_LABEL_FONTS = {
+    "tc": (
+        "Microsoft JhengHei",
+        "Microsoft JhengHei UI",
+        "PingFang HK",
+        "PingFang TC",
+        "Noto Sans HK",
+        "Noto Sans TC",
+        "Noto Sans CJK TC",
+        "Source Han Sans TC",
+        "Source Han Sans HK",
+        "WenQuanYi Zen Hei",
+    ),
+    "sc": (
+        "Microsoft YaHei",
+        "Microsoft YaHei UI",
+        "PingFang SC",
+        "Noto Sans SC",
+        "Noto Sans CJK SC",
+        "Source Han Sans SC",
+        "Source Han Sans CN",
+        "WenQuanYi Zen Hei",
+    ),
+    "en": (
+        "Segoe UI",
+        "Helvetica Neue",
+        "Helvetica",
+        "Noto Sans",
+        "DejaVu Sans",
+        "Arial",
+    ),
+}
+
+
+def _label_font(language: str) -> QFont:
+    """Use the first installed face for the dataset language."""
+    names = _LABEL_FONTS.get(language)
+    if names is None:
+        raise ValueError(f"Unknown label language {language!r}.")
+    families = set(_font_families())
+    for name in names:
+        if name in families:
+            font = QFont(name)
+            break
+    else:
+        font = QFont()
+    font.setPointSize(9)
+    return font
+
+
+def _font_families():
+    """Qt 6 lists families on the class. Qt 5 lists them on an object."""
+    families = getattr(QFontDatabase, "families")
+    try:
+        return families()
+    except TypeError:
+        return QFontDatabase().families()
+
+
+def _label_layer(layer, field_name: str, geometry: str, language: str) -> None:
     settings = QgsPalLayerSettings()
     if hasattr(settings, "setFieldName"):
         settings.setFieldName(field_name)
@@ -348,8 +418,7 @@ def _label_layer(layer, field_name: str, geometry: str) -> None:
     settings.placement = _label_placement(geometry)
 
     text_format = QgsTextFormat()
-    font = QFont("Microsoft JhengHei")
-    font.setPointSize(9)
+    font = _label_font(language)
     text_format.setFont(font)
     text_format.setSize(9)
     text_format.setColor(QColor(32, 32, 32))

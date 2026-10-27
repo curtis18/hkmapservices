@@ -6,7 +6,12 @@ import os
 
 from qgis.PyQt.QtCore import Qt, QTimer
 from qgis.PyQt.QtGui import QIcon
-from qgis.PyQt.QtWidgets import QAction, QDockWidget, QMenu, QToolButton
+from qgis.PyQt.QtWidgets import QDockWidget, QMenu, QToolButton
+
+try:
+    from qgis.PyQt.QtGui import QAction
+except ImportError:
+    from qgis.PyQt.QtWidgets import QAction
 from qgis.core import Qgis, QgsProject
 from qgis.gui import QgsGui
 
@@ -16,7 +21,12 @@ from .convertdialog import ConvertDialog
 from .cursordock import CursorDock, _HOLD_SHORTCUT, _REPLACED_HOLD_SHORTCUTS
 from .dialog import BasemapDialog, DatasetDialog
 from .locationdialog import LocationDialog
-from .layers import add_basemap, add_datasets, repair_grid_sources, shutdown_background_services
+from .layers import (
+    add_basemap,
+    add_datasets,
+    repair_grid_sources,
+    shutdown_background_services,
+)
 from .splitview import SplitView
 from .swipeview import SwipeView
 
@@ -270,6 +280,7 @@ class HkMapServices:
 
     def _on_project_cleared(self) -> None:
         self._stop_compare()
+        shutdown_background_services()
 
     def _stop_compare(self) -> None:
         if self.compare_dock is not None:

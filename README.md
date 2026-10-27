@@ -37,7 +37,9 @@ The list is alphabetical and can be searched. It scrolls as more datasets are ad
 - Traffic detectors (EPSG:2326)
 - Water dispensers (EPSG:4326)
 
-Names follow the language selected in that dialog. Turn on **View → Map Tips** to see the name and the other fields recorded for that dataset. Nothing is checked at first. **Add to map** stays off until at least one dataset is checked, including one hidden by the search box.
+Names follow the language selected in that dialog. Where a dataset has no Simplified Chinese field, the Traditional Chinese name is shown. Turn on **View → Map Tips** to see the name and the other fields recorded for that dataset. Nothing is checked at first. **Add to map** stays off until at least one dataset is checked, including one hidden by the search box.
+
+Labels use the first installed font for the language: Microsoft JhengHei, PingFang HK/TC, or Noto Sans HK/TC/CJK TC for Traditional Chinese; Microsoft YaHei, PingFang SC, or Noto Sans SC/CJK SC for Simplified Chinese; and Segoe UI, Helvetica, Noto Sans, or DejaVu Sans for English. Fonts differ by operating system, so labels can look slightly different on Windows, macOS, and Linux. On Linux, install a CJK font package if labels show missing glyphs.
 
 ## Convert Coordinates
 

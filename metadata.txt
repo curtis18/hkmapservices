@@ -7,6 +7,7 @@ about=Adds a Lands Department imagery, topographic, or vector basemap, with rast
 version=1.0.0
 author=Curtis Yung
 email=curtisgmailer@gmail.com
+license=GNU General Public License v2 or later
 changelog=1.0.0 - Basemap and dataset actions, imagery topographic and vector basemaps, raster or vector labels, CSDI district, library, fitness room, outdoor fitness equipment, traffic detector, water dispenser, and barbecue site layers, local HK1980 and WGS84 conversion, a cursor readout, location search, one swipe tool with a split mode, dataset links, and coordinate checks.
 experimental=False
 deprecated=False

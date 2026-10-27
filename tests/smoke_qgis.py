@@ -66,7 +66,7 @@ def main() -> int:
         )
         from hkmapservices.cursordock import CursorDock, _HOLD_SHORTCUT, _dms_copy_text, _dms_text
         from hkmapservices.hkmapservices import _keep_hold_shortcut
-        from hkmapservices.locationdialog import show_location
+        from hkmapservices.locationdialog import LocationDialog, show_location
         from hkmapservices.splitview import SplitView
         from hkmapservices.swipeview import SwipeView
         from hkmapservices.coords import convert_values
@@ -339,6 +339,26 @@ def main() -> int:
             failures.append("a long coordinate table did not finish loading")
         if convert_dialog._table.cellWidget(249, 6) is not None or convert_dialog._table.item(249, 7) is None:
             failures.append("a long coordinate table built a button for every row")
+        convert_dialog._fill_table(wide_records + wide_records)
+        convert_dialog.close()
+        application.processEvents()
+        if (
+            convert_dialog._table.signalsBlocked()
+            or not convert_dialog._table.updatesEnabled()
+            or convert_dialog._table.rowCount() != 200
+            or not convert_dialog._busy_buttons[0].isEnabled()
+        ):
+            failures.append("closing during a fill left the coordinate table locked")
+        convert_dialog._fill_table(wide_records + wide_records)
+        convert_dialog.reject()
+        application.processEvents()
+        if (
+            convert_dialog._table.signalsBlocked()
+            or not convert_dialog._table.updatesEnabled()
+            or convert_dialog._table.rowCount() != 200
+            or not convert_dialog._busy_buttons[0].isEnabled()
+        ):
+            failures.append("rejecting during a fill left the coordinate table locked")
 
         geographic_layer, geographic_ids, geographic_skipped = add_converted_points(
             [
@@ -429,6 +449,15 @@ def main() -> int:
 
             def mainWindow(self):
                 return None
+
+        location_dialog = LocationDialog(_Iface())
+        location_dialog._closed = True
+        location_dialog._start_search()
+        if location_dialog._closed:
+            failures.append("a new location search stayed closed")
+        location_dialog.reject()
+        if not location_dialog._closed:
+            failures.append("rejecting the location dialog did not stop the search")
 
         cursor = CursorDock(_Iface())
         margins = cursor._latitude_dms_row.layout().contentsMargins()

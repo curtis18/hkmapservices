@@ -84,14 +84,19 @@ def normalize_record(raw: dict) -> dict:
     return record
 
 
-def read_csv_records(path: str) -> list:
+def read_csv_records(path: str, limit: int | None = None) -> list:
     """Read a CSV file into normalized coordinate records."""
     with open(path, "rb") as handle:
         payload = handle.read()
     reader = csv.DictReader(io.StringIO(decode_csv_text(payload), newline=""))
     if reader.fieldnames is None:
         raise ValueError("The CSV file has no header row.")
-    return [normalize_record(row) for row in reader]
+    records = []
+    for row in reader:
+        records.append(normalize_record(row))
+        if limit is not None and len(records) >= limit:
+            break
+    return records
 
 
 def decode_csv_text(payload: bytes) -> str:
@@ -201,10 +206,11 @@ def _is_number(text) -> bool:
 def publish_file(path: str, write) -> bool:
     """Write beside the destination and replace it only after that write succeeds."""
     directory = os.path.dirname(os.path.abspath(path)) or "."
-    os.makedirs(directory, exist_ok=True)
-    handle, temp = tempfile.mkstemp(prefix="hkmap-", suffix=".xlsx", dir=directory)
-    os.close(handle)
+    temp = None
     try:
+        os.makedirs(directory, exist_ok=True)
+        handle, temp = tempfile.mkstemp(prefix="hkmap-", suffix=".xlsx", dir=directory)
+        os.close(handle)
         os.remove(temp)
         if not write(temp):
             return False
@@ -213,7 +219,7 @@ def publish_file(path: str, write) -> bool:
     except OSError:
         return False
     finally:
-        if os.path.exists(temp):
+        if temp and os.path.exists(temp):
             try:
                 os.remove(temp)
             except OSError:

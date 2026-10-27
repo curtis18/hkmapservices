@@ -22,6 +22,7 @@ from qgis.PyQt.QtWidgets import (
 from qgis.core import (
     QgsCsException,
     QgsFeature,
+    QgsFeatureRequest,
     QgsField,
     QgsGeometry,
     QgsMarkerSymbol,
@@ -137,13 +138,42 @@ class ConvertDialog(QDialog):
         for button in (transform, add_all, save, close):
             action_buttons.addWidget(button)
         layout.addLayout(action_buttons)
+        self._busy_buttons = (add_row, remove_row, load, template, transform, add_all, save)
         self._status = QLabel("")
         self._status.setWordWrap(True)
         layout.addWidget(self._status)
 
     def closeEvent(self, event) -> None:
-        self._fill_token += 1
+        self._finish_fill(True)
         super().closeEvent(event)
+
+    def reject(self) -> None:
+        """Stop a chunked fill when Close or Esc rejects the dialog."""
+        self._finish_fill(True)
+        super().reject()
+
+    def _set_busy(self, busy: bool) -> None:
+        for button in self._busy_buttons:
+            button.setEnabled(not busy)
+
+    def _finish_fill(self, trim: bool) -> None:
+        """Stop a chunked fill and leave the table able to accept edits."""
+        written = self._pending_row
+        incomplete = bool(self._pending_records) and written < len(self._pending_records)
+        self._fill_token += 1
+        self._pending_records = []
+        self._pending_row = 0
+        self._after_fill = None
+        self._rejected_cells = 0
+        if trim and incomplete:
+            self._table.setRowCount(written)
+        self._table.blockSignals(False)
+        self._table.setUpdatesEnabled(True)
+        if trim and incomplete and self._table.rowCount() == 0:
+            self._insert_empty_row(False)
+        self._set_busy(False)
+        if self._status.text() == "Loading...":
+            self._show_status("", "plain")
 
     def _add_row(self) -> None:
         self._insert_empty_row(True)
@@ -298,12 +328,16 @@ class ConvertDialog(QDialog):
         return [self._record(row) for row in range(self._table.rowCount())]
 
     def _fill_table(self, records, purpose: str = "replace", after=None) -> None:
-        self._fill_purpose = _fill_purpose(purpose)
+        rejected = self._rejected_cells
+        purpose = _fill_purpose(purpose)
+        self._finish_fill(True)
+        self._fill_purpose = purpose
         self._after_fill = after
-        self._fill_token += 1
+        self._rejected_cells = rejected if purpose == "load" else 0
         token = self._fill_token
         self._pending_records = list(records)
         self._pending_row = 0
+        self._set_busy(True)
         self._table.setUpdatesEnabled(False)
         self._table.blockSignals(True)
         self._table.setRowCount(len(self._pending_records))
@@ -318,11 +352,14 @@ class ConvertDialog(QDialog):
         for row in range(self._pending_row, end):
             self._write_row(row, self._pending_records[row])
         self._pending_row = end
+        if token != self._fill_token:
+            return
         if self._pending_row < len(self._pending_records):
             QTimer.singleShot(0, lambda token=token: self._fill_batch(token))
             return
         self._table.blockSignals(False)
         self._table.setUpdatesEnabled(True)
+        self._set_busy(False)
         rejected = self._rejected_cells
         self._rejected_cells = 0
         if self._fill_purpose == "load":
@@ -386,10 +423,11 @@ class ConvertDialog(QDialog):
 def load_coordinate_file(path: str) -> tuple:
     """Return normalized records and whether the file was cut at the row limit."""
     suffix = os.path.splitext(path)[1].casefold()
+    cap = MAX_POINTS + 1
     if suffix == ".csv":
-        records = read_csv_records(path)
+        records = read_csv_records(path, cap)
     elif suffix in (".xlsx", ".xls"):
-        records = _read_ogr_records(path)
+        records = _read_ogr_records(path, cap)
     else:
         raise ValueError("Load a CSV or Excel file.")
     truncated = len(records) > MAX_POINTS
@@ -399,9 +437,9 @@ def load_coordinate_file(path: str) -> tuple:
 def save_template(path: str) -> str:
     """Write a one-row Excel template. Return the path that was written."""
     if not path.casefold().endswith(".xlsx"):
-        raise ValueError("Excel could not be written.")
+        raise ValueError(f"Excel could not be written to {path}.")
     if not write_xlsx_records(path, [TEMPLATE_RECORD]):
-        raise ValueError("Excel could not be written.")
+        raise ValueError(f"Excel could not be written to {path}.")
     return path
 
 
@@ -508,13 +546,16 @@ def add_converted_points(records: list, direction: str = "hkgrid") -> tuple:
     return layer, added, skipped
 
 
-def _read_ogr_records(path: str) -> list:
+def _read_ogr_records(path: str, limit: int | None = None) -> list:
     layer = QgsVectorLayer(_ogr_uri(path), "coordinates", "ogr")
     if not layer.isValid():
         raise ValueError("Excel could not be opened. Save the sheet as CSV and load that instead.")
     names = [field.name() for field in layer.fields()]
+    request = QgsFeatureRequest()
+    if limit is not None and hasattr(request, "setLimit"):
+        request.setLimit(limit)
     records = []
-    for feature in layer.getFeatures():
+    for feature in layer.getFeatures(request):
         raw = {}
         for name in names:
             value = feature[name]
@@ -523,6 +564,8 @@ def _read_ogr_records(path: str) -> list:
             else:
                 raw[name] = value
         records.append(normalize_record(raw))
+        if limit is not None and len(records) >= limit:
+            break
     return records
 
 

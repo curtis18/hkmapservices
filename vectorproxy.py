@@ -9,20 +9,27 @@ Lands Department.
 from __future__ import annotations
 
 import gzip
+import http.client
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
 
 from .catalog import API_ROOT, vector_service_path
 
 
 _HOST = "127.0.0.1"
 _FIRST_PORT = 47880
+_TILE_TIMEOUT = 20
+_JSON_TIMEOUT = 60
+_POOL_LIMIT = 4
 _server = None
 _lock = threading.Lock()
+_pool = []
+_pool_lock = threading.Lock()
+_json_cache = {}
+_json_lock = threading.Lock()
 
 
 class _ProxyHandler(BaseHTTPRequestHandler):
@@ -52,7 +59,6 @@ class _ProxyHandler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(body)
 
@@ -81,6 +87,9 @@ def stop_proxy() -> None:
     with _lock:
         server = _server
         _server = None
+    _close_pool()
+    with _json_lock:
+        _json_cache.clear()
     if server is not None:
         server.shutdown()
         server.server_close()
@@ -124,17 +133,94 @@ def _without_tilemap(body: bytes) -> tuple:
 
 
 def _fetch(url: str) -> tuple:
-    request = Request(
-        url,
-        headers={
-            "Accept-Encoding": "identity",
-            "User-Agent": "hkmapservices",
-        },
-    )
-    with urlopen(request, timeout=60) as response:
-        body = response.read()
-        content_type = response.headers.get("Content-Type", "application/octet-stream")
-        encoding = response.headers.get("Content-Encoding", "")
-    if encoding.lower() == "gzip" or body[:2] == b"\x1f\x8b":
-        body = gzip.decompress(body)
-    return body, content_type.split(";", 1)[0]
+    parts = urlsplit(url)
+    cacheable = _cacheable(parts.path)
+    if cacheable:
+        with _json_lock:
+            cached = _json_cache.get(url)
+        if cached is not None:
+            return cached
+    timeout = _JSON_TIMEOUT if cacheable else _TILE_TIMEOUT
+    body, content_type = _fetch_upstream(url, timeout)
+    if cacheable:
+        with _json_lock:
+            _json_cache[url] = (body, content_type)
+    return body, content_type
+
+
+def _cacheable(path: str) -> bool:
+    return _is_service_description(path) or "/resources/styles/" in path
+
+
+def _fetch_upstream(url: str, timeout: int) -> tuple:
+    parts = urlsplit(url)
+    if parts.scheme != "https" or not parts.hostname:
+        raise URLError(f"Unsupported tile URL {url}.")
+    path = parts.path or "/"
+    if parts.query:
+        path = path + "?" + parts.query
+    port = parts.port or 443
+    last_error = None
+    for _attempt in (1, 2):
+        conn = _borrow_connection(parts.hostname, port, timeout)
+        try:
+            conn.request(
+                "GET",
+                path,
+                headers={
+                    "Accept-Encoding": "identity",
+                    "User-Agent": "hkmapservices",
+                    "Connection": "keep-alive",
+                    "Host": parts.hostname,
+                },
+            )
+            response = conn.getresponse()
+            body = response.read()
+            content_type = response.getheader("Content-Type", "application/octet-stream")
+            encoding = response.getheader("Content-Encoding", "")
+            status = response.status
+            reusable = (response.getheader("Connection") or "").lower() != "close"
+        except (http.client.HTTPException, TimeoutError, OSError) as exc:
+            conn.close()
+            last_error = exc
+            continue
+        _return_connection(conn, reusable and status < 400)
+        if status >= 400:
+            raise HTTPError(url, status, "tile request failed", hdrs=None, fp=None)
+        if encoding.lower() == "gzip" or body[:2] == b"\x1f\x8b":
+            body = gzip.decompress(body)
+        return body, content_type.split(";", 1)[0]
+    raise URLError(last_error)
+
+
+def _borrow_connection(host: str, port: int, timeout: int):
+    with _pool_lock:
+        while _pool:
+            conn = _pool.pop()
+            if getattr(conn, "host", None) == host and getattr(conn, "port", None) == port:
+                conn.timeout = timeout
+                sock = getattr(conn, "sock", None)
+                if sock is not None:
+                    sock.settimeout(timeout)
+                return conn
+            conn.close()
+    return http.client.HTTPSConnection(host, port, timeout=timeout)
+
+
+def _return_connection(conn, reusable: bool) -> None:
+    if not reusable:
+        conn.close()
+        return
+    with _pool_lock:
+        if len(_pool) < _POOL_LIMIT:
+            _pool.append(conn)
+            return
+    conn.close()
+
+
+def _close_pool() -> None:
+    with _pool_lock:
+        connections = list(_pool)
+        _pool.clear()
+    for conn in connections:
+        conn.close()

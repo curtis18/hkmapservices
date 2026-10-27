@@ -98,7 +98,14 @@ class LocationDialog(QDialog):
         self._abort_reply()
         super().closeEvent(event)
 
+    def reject(self) -> None:
+        """Abort an in-flight search when Close or Esc rejects the dialog."""
+        self._closed = True
+        self._abort_reply()
+        super().reject()
+
     def _start_search(self) -> None:
+        self._closed = False
         query = self._query.text().strip()
         if not query:
             self._status.setText("Enter a place, address, or facility name.")
