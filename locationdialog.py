@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 
 from qgis.PyQt.QtCore import Qt, QTimer, QUrl
 from qgis.PyQt.QtNetwork import QNetworkReply, QNetworkRequest
@@ -32,7 +33,8 @@ from qgis.core import (
 )
 from qgis.utils import iface
 
-from .config import HK1980
+from .compat import enum_member
+from .config import HK1980, WEB_MERCATOR
 from .locations import parse_results, search_url
 
 
@@ -40,6 +42,7 @@ _TITLE = "Location Search"
 _LAYER_ROLE = "location-search"
 _LAYER_NAME = "Location search"
 _COLUMNS = ("Name", "Address", "District")
+_VIEW_SIZE = 2000.0
 
 
 class LocationDialog(QDialog):
@@ -49,6 +52,7 @@ class LocationDialog(QDialog):
         super().__init__(parent or iface_object.mainWindow())
         self.setWindowTitle(_TITLE)
         self.setMinimumSize(720, 420)
+        self._iface = iface_object
         self._reply = None
         self._closed = False
         self._results = []
@@ -193,11 +197,12 @@ class LocationDialog(QDialog):
 
     def _fly_to_row(self, row: int, _column: int) -> None:
         if 0 <= row < len(self._results):
-            show_location(self._results[row])
+            show_location(self._results[row], self._iface)
 
 
-def show_location(place: dict):
+def show_location(place: dict, iface_object=None):
     """Add a point of interest and move the map to it. Earlier points stay."""
+    canvas = _map_canvas(iface_object)
     layer = _location_layer()
     created = layer is None
     if created:
@@ -222,7 +227,8 @@ def show_location(place: dict):
     if created and added:
         QgsProject.instance().addMapLayer(layer)
     if added:
-        _fly_to(place["easting"], place["northing"])
+        _show_on_canvas(canvas, layer, iface_object or iface)
+        _fly_to(canvas, place["easting"], place["northing"])
     return layer
 
 
@@ -258,20 +264,105 @@ def _new_location_layer() -> QgsVectorLayer:
     return layer
 
 
-def _fly_to(easting: float, northing: float) -> None:
-    canvas = iface.mapCanvas() if iface is not None else None
+def _map_canvas(iface_object):
+    if iface_object is None:
+        iface_object = iface
+    if iface_object is None:
+        return None
+    finder = getattr(iface_object, "mapCanvas", None)
+    return finder() if callable(finder) else None
+
+
+def _show_on_canvas(canvas, layer, iface_object=None) -> None:
+    if canvas is None or layer is None:
+        return
+    node = QgsProject.instance().layerTreeRoot().findLayer(layer.id())
+    if node is not None and not node.isVisible():
+        node.setItemVisibilityChecked(True)
+    if layer in canvas.layers():
+        return
+    finder = getattr(iface_object, "layerTreeCanvasBridge", None) if iface_object is not None else None
+    bridge = finder() if callable(finder) else None
+    if bridge is not None and hasattr(bridge, "setCanvasLayers"):
+        bridge.setCanvasLayers()
+        if layer in canvas.layers():
+            return
+    canvas.setLayers([layer] + list(canvas.layers()))
+
+
+def _fly_to(canvas, easting: float, northing: float) -> bool:
     if canvas is None:
-        return
-    rectangle = QgsRectangle(easting - 250, northing - 250, easting + 250, northing + 250)
+        return False
+    destination = _destination_crs(canvas)
+    if not destination.isValid():
+        return False
+    half = _VIEW_SIZE / 2.0
+    rectangle = QgsRectangle(easting - half, northing - half, easting + half, northing + half)
     source = QgsCoordinateReferenceSystem(HK1980)
-    transform = QgsCoordinateTransform(source, canvas.mapSettings().destinationCrs(), QgsProject.instance())
-    try:
-        output = transform.transformBoundingBox(rectangle)
-    except QgsCsException:
-        canvas.refresh()
-        return
+    if destination == source:
+        output = rectangle
+    else:
+        transform = QgsCoordinateTransform(source, destination, QgsProject.instance())
+        if not transform.isValid():
+            return False
+        try:
+            output = transform.transformBoundingBox(rectangle)
+        except QgsCsException:
+            return False
+        if not _round_trips(destination, source, output, easting, northing):
+            return False
+    if not _usable_extent(output):
+        return False
     canvas.setExtent(output)
     canvas.refresh()
+    return True
+
+
+def _destination_crs(canvas) -> QgsCoordinateReferenceSystem:
+    """Never hand QGIS an undefined target CRS, which blanks the map."""
+    project = QgsProject.instance()
+    destination = canvas.mapSettings().destinationCrs()
+    if destination.isValid():
+        return destination
+    destination = project.crs()
+    if destination.isValid():
+        canvas.setDestinationCrs(destination)
+        return destination
+    destination = _fallback_crs(project)
+    project.setCrs(destination)
+    canvas.setDestinationCrs(destination)
+    return destination
+
+
+def _fallback_crs(project) -> QgsCoordinateReferenceSystem:
+    for layer in project.mapLayers().values():
+        if layer.isValid() and layer.crs().isValid():
+            return layer.crs()
+    return QgsCoordinateReferenceSystem(WEB_MERCATOR)
+
+
+def _usable_extent(rectangle) -> bool:
+    if rectangle is None or rectangle.isEmpty():
+        return False
+    values = (
+        rectangle.xMinimum(),
+        rectangle.yMinimum(),
+        rectangle.xMaximum(),
+        rectangle.yMaximum(),
+    )
+    return all(math.isfinite(value) for value in values) and rectangle.width() > 0 and rectangle.height() > 0
+
+
+def _round_trips(destination, source, rectangle, easting: float, northing: float) -> bool:
+    """Reject a transform that quietly left the point in the source CRS."""
+    inverse = QgsCoordinateTransform(destination, source, QgsProject.instance())
+    if not inverse.isValid():
+        return False
+    try:
+        check = inverse.transform(rectangle.center())
+    except QgsCsException:
+        return False
+    return abs(check.x() - easting) <= 10.0 and abs(check.y() - northing) <= 10.0
 
 
 def _pair(english: str, chinese: str) -> str:
@@ -280,9 +371,7 @@ def _pair(english: str, chinese: str) -> str:
 
 
 def _no_error():
-    if hasattr(QNetworkReply, "NoError"):
-        return QNetworkReply.NoError
-    return QNetworkReply.NetworkError.NoError
+    return enum_member(QNetworkReply, "NetworkError", "NoError")
 
 
 def _alignment(name: str):

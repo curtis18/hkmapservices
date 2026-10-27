@@ -50,6 +50,7 @@ def main() -> int:
             QWidget,
         )
         from qgis.core import QgsVectorLayer
+        from qgis.gui import QgsMapCanvas
 
         from hkmapservices.aboutdialog import AboutDialog
         from hkmapservices.catalog import hk80_raster_xml, raster_url
@@ -432,11 +433,48 @@ def main() -> int:
         second_place["name_en"] = "Second place"
         second_place["easting"] = 803285.0
         second_place["northing"] = 813131.0
+        QgsProject.instance().setCrs(QgsCoordinateReferenceSystem("EPSG:3857"))
         location_layer = show_location(first_place)
         if location_layer is None or location_layer.crs().authid() != "EPSG:2326" or location_layer.featureCount() != 1:
             failures.append("location search did not add a HK1980 point")
         elif show_location(second_place).featureCount() != 2:
             failures.append("a later location did not keep the first point")
+
+        canvas = QgsMapCanvas()
+        canvas.resize(640, 480)
+        existing_layer = QgsVectorLayer("Point?crs=EPSG:3857", "Existing canvas layer", "memory")
+        QgsProject.instance().addMapLayer(existing_layer, False)
+        canvas.setLayers([existing_layer])
+        canvas.setDestinationCrs(QgsCoordinateReferenceSystem())
+
+        class _CanvasIface:
+            def mapCanvas(self):
+                return canvas
+
+            def mainWindow(self):
+                return None
+
+        travelled = show_location(first_place, _CanvasIface())
+        destination = canvas.mapSettings().destinationCrs()
+        if not destination.isValid():
+            failures.append("location search left the map without a CRS")
+        elif travelled not in canvas.layers() or existing_layer not in canvas.layers():
+            failures.append("location search dropped layers from the map")
+        else:
+            transform = QgsCoordinateTransform(
+                QgsCoordinateReferenceSystem("EPSG:2326"),
+                destination,
+                QgsProject.instance(),
+            )
+            expected = transform.transform(QgsPointXY(first_place["easting"], first_place["northing"]))
+            centre = canvas.extent().center()
+            if abs(centre.x() - expected.x()) > 1.0 or abs(centre.y() - expected.y()) > 1.0:
+                failures.append(f"location search centred on {centre.toString()} instead of {expected.toString()}")
+            if canvas.scale() >= 1000000:
+                failures.append(f"location search zoomed to an unusable scale of {canvas.scale()}")
+        QgsProject.instance().removeMapLayer(existing_layer.id())
+        canvas.deleteLater()
+        application.processEvents()
 
         if _dms_text(22.310602434) != "22\u00b0 18' 38.17\" (DMS)":
             failures.append(f"DMS label is {_dms_text(22.310602434)!r}")

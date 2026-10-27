@@ -17,6 +17,8 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 
+from .compat import enum_member
+
 
 _SOURCE_URL = "https://github.com/curtis18/hkmapservices"
 _TRACKER_URL = "https://github.com/curtis18/hkmapservices/issues"
@@ -139,9 +141,7 @@ def _font_families():
 
 
 def _fixed_font():
-    if hasattr(QFontDatabase, "FixedFont"):
-        return QFontDatabase.FixedFont
-    return QFontDatabase.SystemFont.FixedFont
+    return enum_member(QFontDatabase, "SystemFont", "FixedFont")
 
 
 def _font_style(name: str):

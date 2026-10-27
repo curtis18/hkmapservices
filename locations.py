@@ -6,9 +6,7 @@ x is easting and y is northing.
 
 from __future__ import annotations
 
-import json
 from urllib.parse import quote
-from urllib.request import Request, urlopen
 
 
 API_URL = "https://www.map.gov.hk/gs/api/v1.0.0/locationSearch"
@@ -48,17 +46,6 @@ def parse_results(payload) -> list:
             }
         )
     return results
-
-
-def fetch_locations(query: str) -> list:
-    """Request one search and return every match."""
-    request = Request(
-        search_url(query),
-        headers={"User-Agent": "hkmapservices", "Accept": "application/json"},
-    )
-    with urlopen(request, timeout=30) as response:
-        payload = json.loads(response.read().decode("utf-8"))
-    return parse_results(payload)
 
 
 def _text(value) -> str:

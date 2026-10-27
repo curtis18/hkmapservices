@@ -7,9 +7,9 @@ with a normal Python.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from html import escape
 import json
 import os
-from xml.sax.saxutils import escape
 
 from .config import (
     AERIAL_CREDIT,
@@ -325,7 +325,7 @@ def hk80_raster_xml(url: str) -> str:
         .replace("{x}", "${x}")
         .replace("{y}", "${y}")
     )
-    safe_url = escape(gdal_url, {"'": "&apos;", '"': "&quot;"})
+    safe_url = escape(gdal_url, quote=True)
     return (
         "<GDAL_WMS>\n"
         "  <Service name=\"TMS\">\n"

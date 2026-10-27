@@ -17,6 +17,7 @@ from qgis.gui import QgsGui
 
 from .aboutdialog import AboutDialog
 from .comparedock import CompareDock
+from .compat import enum_member, exec_dialog
 from .convertdialog import ConvertDialog
 from .cursordock import CursorDock, _HOLD_SHORTCUT, _REPLACED_HOLD_SHORTCUTS
 from .dialog import BasemapDialog, DatasetDialog
@@ -301,7 +302,7 @@ class HkMapServices:
         bar = finder()
         if bar is None:
             return
-        level = Qgis.Warning if hasattr(Qgis, "Warning") else Qgis.MessageLevel.Warning
+        level = enum_member(Qgis, "MessageLevel", "Warning")
         bar.pushMessage("Hong Kong Map Services", text, level, 8)
 
     def _show_dialog(self, dialog) -> None:
@@ -315,8 +316,7 @@ class HkMapServices:
 
 
 def _accepted(dialog) -> bool:
-    result = dialog.exec() if hasattr(dialog, "exec") else dialog.exec_()
-    return bool(result)
+    return bool(exec_dialog(dialog))
 
 
 def _popup_mode(name: str):

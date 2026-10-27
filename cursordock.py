@@ -19,6 +19,7 @@ from qgis.PyQt.QtWidgets import (
 )
 from qgis.core import QgsCsException
 
+from .compat import enum_member, exec_dialog
 from .config import HK1980, WGS84
 from .coords import transform_xy
 from .transform import format_dms, format_rounded
@@ -361,10 +362,7 @@ def _copy_button(button) -> None:
 
 def _number_font() -> QFont:
     font = QFont("Consolas")
-    if hasattr(QFont, "Monospace"):
-        font.setStyleHint(QFont.Monospace)
-    else:
-        font.setStyleHint(QFont.StyleHint.Monospace)
+    font.setStyleHint(enum_member(QFont, "StyleHint", "Monospace"))
     return font
 
 
@@ -381,5 +379,4 @@ def _button_role(name: str):
 
 
 def _accepted(dialog) -> bool:
-    result = dialog.exec() if hasattr(dialog, "exec") else dialog.exec_()
-    return bool(result)
+    return bool(exec_dialog(dialog))

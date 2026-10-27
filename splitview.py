@@ -10,6 +10,7 @@ from qgis.gui import QgsMapCanvas, QgsMapToolPan
 
 from .compare import CanvasOverride, CompareSettings, CompareView, _disconnect
 from .comparemath import normalize_direction, side_opacity
+from .compat import enum_member
 
 
 class SplitView(CompareView):
@@ -395,7 +396,7 @@ def _let_splitter_size(widget) -> None:
 
 
 def _ignored_policy():
-    ignored = QSizePolicy.Ignored if hasattr(QSizePolicy, "Ignored") else QSizePolicy.Policy.Ignored
+    ignored = enum_member(QSizePolicy, "Policy", "Ignored")
     return QSizePolicy(ignored, ignored)
 
 

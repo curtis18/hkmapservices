@@ -1,10 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
   <rect x="8" y="8" width="112" height="112" rx="22" fill="#f4f1e8"/>
-  <rect x="26" y="30" width="76" height="68" rx="4" fill="#e7f2ea" stroke="#1c4b3a" stroke-width="3"/>
-  <path d="M26 70 H102" stroke="#f4f1e8" stroke-width="7"/>
-  <path d="M58 30 V98" stroke="#f4f1e8" stroke-width="7"/>
-  <path d="M26 78 C44 70 58 90 78 80 C90 74 96 86 102 80 V98 H26 Z" fill="#3d8eb5"/>
-  <path d="M78 40 C70 40 64 46 64 54 C64 64 78 78 78 78 C78 78 92 64 92 54 C92 46 86 40 78 40 Z" fill="#c0392b"/>
-  <circle cx="78" cy="54" r="5" fill="#f4f1e8"/>
+  <rect x="26" y="24" width="76" height="80" rx="6" fill="#c5ddf0" stroke="#1c4b3a" stroke-width="3"/>
+  <path d="M37 60 L39 52 L53 50 L67 52 L75 46 L85 50 L91 60 L89 72 L85 90 L73 78 L59 74 L45 70 L37 64 Z" fill="#d7e6c8" stroke="#1c4b3a" stroke-width="2" stroke-linejoin="round"/>
+  <path d="M54 36 C47 36 42 41 42 48 C42 56 54 68 54 68 C54 68 66 56 66 48 C66 41 61 36 54 36 Z" fill="#c0392b"/>
+  <circle cx="54" cy="48" r="4" fill="#f4f1e8"/>
   <rect x="8" y="8" width="112" height="112" rx="22" fill="none" stroke="#1c4b3a" stroke-width="10"/>
 </svg>

@@ -2,8 +2,8 @@
 name=Hong Kong Map Services
 qgisMinimumVersion=3.28
 qgisMaximumVersion=4.99
-description=Add a Lands Department basemap or Hong Kong CSDI datasets.
-about=Adds a Lands Department imagery, topographic, or vector basemap, with raster or vector place-name labels. CSDI datasets are added separately, without another basemap. Convert HK1980 Grid and WGS84 coordinates, read both under the map cursor, search places, and compare layers or groups with Swipe and Split.
+description=Add Hong Kong basemaps and datasets, convert coordinates, search places, and compare maps.
+about=Adds a Lands Department imagery, topographic, or vector basemap with optional raster or vector place-name labels. CSDI datasets are added separately, so no second basemap is added. It also converts HK1980 Grid and WGS84 coordinates, shows both coordinate systems under the map cursor, searches for places, and compares layers or groups with Swipe and Split.
 version=1.0.0
 author=Curtis Yung
 email=curtisgmailer@gmail.com

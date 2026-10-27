@@ -35,6 +35,7 @@ from qgis.core import (
 )
 from qgis.utils import iface
 
+from .compat import enum_member
 from .config import HK1980, WGS84
 from .coords import convert_values, transform_xy
 from .transform import (
@@ -475,7 +476,7 @@ def _write_xlsx_file(path: str, records: list) -> bool:
         )
     except Exception:
         return False
-    return error == QgsVectorFileWriter.NoError
+    return error == enum_member(QgsVectorFileWriter, "WriterError", "NoError")
 
 
 def added_message(count: int, skipped: int) -> str:

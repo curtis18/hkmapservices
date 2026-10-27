@@ -19,6 +19,7 @@ from .comparemath import (
     side_opacity,
     swipe_handle_rect,
 )
+from .compat import enum_member
 
 
 class SwipeView(CompareView):
@@ -349,7 +350,7 @@ def _event_pos(event):
 
 
 def _is_left_click(event) -> bool:
-    left = Qt.LeftButton if hasattr(Qt, "LeftButton") else Qt.MouseButton.LeftButton
+    left = enum_member(Qt, "MouseButton", "LeftButton")
     try:
         return event.button() == left
     except AttributeError:

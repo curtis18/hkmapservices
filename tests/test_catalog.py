@@ -185,6 +185,11 @@ class CatalogTests(unittest.TestCase):
         self.assertIn(f"<LowerRightY>{lower_y:.6f}</LowerRightY>", xml)
         self.assertAlmostEqual(catalog.HK80_LEVEL0_SPAN, 40075016.685568, places=5)
 
+    def test_hk80_raster_xml_escapes_special_characters(self) -> None:
+        xml = catalog.hk80_raster_xml("https://example.test/tiles?a=1&b=\"2\"&c='3'")
+        self.assertIn("a=1&amp;b=&quot;2&quot;&amp;c=&#x27;3&#x27;", xml)
+        self.assertNotIn("a=1&b=", xml)
+
     def test_unknown_values_are_rejected(self) -> None:
         with self.assertRaises(ValueError):
             catalog.raster_url("satellite", "HK80")
