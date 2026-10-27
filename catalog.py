@@ -371,11 +371,20 @@ def write_grid_files(directory: str) -> dict:
         filename = grid_xml_name(kind, language)
         path = os.path.join(directory, filename)
         url = raster_url(kind, "HK80", language)
-        with open(path, "w", encoding="utf-8", newline="\n") as handle:
-            handle.write(hk80_raster_xml(url))
+        text = hk80_raster_xml(url)
+        if not _grid_file_current(path, text):
+            with open(path, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(text)
         key = filename[:-4]
         written[key] = path
     return written
+
+
+def _grid_file_current(path: str, text: str) -> bool:
+    if not os.path.exists(path):
+        return False
+    with open(path, encoding="utf-8", newline="") as handle:
+        return handle.read() == text
 
 
 def basemap_credits(kind: str) -> tuple:

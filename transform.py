@@ -7,7 +7,10 @@ and uses PROJ through QGIS.
 from __future__ import annotations
 
 import csv
+import io
+import os
 import re
+import tempfile
 from decimal import Decimal, ROUND_HALF_UP
 
 
@@ -30,7 +33,8 @@ TEMPLATE_RECORD = {
     "remarks": "",
 }
 
-_COORDINATE_TEXT = re.compile(r"^[0-9]*\.?[0-9]*$")
+COORDINATE_PATTERN = r"^(?:\d+(?:\.\d*)?|\.\d+)?$"
+_COORDINATE_TEXT = re.compile(COORDINATE_PATTERN)
 _COORDINATE_FIELDS = ("northing", "easting", "latitude", "longitude")
 
 _HEADER_FIELDS = {
@@ -54,6 +58,13 @@ _HEADER_FIELDS = {
     "remark": "remarks",
 }
 
+# Frequent characters used when both Big5 and GB18030 can decode the same bytes.
+_COMMON_CJK = frozenset(
+    "的一是不了在人有我他这个们中来上大为和国地到以说时要就出会也你对生能而子那得于着下自之年过发后作里用道行所然家种事成方多经么去法学如都同现当没动面起看定天分还进好小部其些主样理心她本前开但因只从想实"
+    "的一是不了在人有我他這個們中來上大為和國地到以說時要就出會也你對生能而子那得於著下自之年過發後作裡用道行所然家種事成方多經麼去法學如都同現當沒動面起看定天分還進好小部其些主樣理心她本前開但因只從想實"
+    "香港九龍新界觀塘荃灣沙田大埔元朗屯門西貢離島油尖旺深水埗黃大仙葵青灣仔备注備註說明名称名稱地址深圳广州廣州观塘"
+)
+
 
 def normalize_record(raw: dict) -> dict:
     """Map a spreadsheet row onto point id, northing, easting, latitude, and longitude."""
@@ -75,11 +86,44 @@ def normalize_record(raw: dict) -> dict:
 
 def read_csv_records(path: str) -> list:
     """Read a CSV file into normalized coordinate records."""
-    with open(path, newline="", encoding="utf-8-sig") as handle:
-        reader = csv.DictReader(handle)
-        if reader.fieldnames is None:
-            raise ValueError("The CSV file has no header row.")
-        return [normalize_record(row) for row in reader]
+    with open(path, "rb") as handle:
+        payload = handle.read()
+    reader = csv.DictReader(io.StringIO(decode_csv_text(payload), newline=""))
+    if reader.fieldnames is None:
+        raise ValueError("The CSV file has no header row.")
+    return [normalize_record(row) for row in reader]
+
+
+def decode_csv_text(payload: bytes) -> str:
+    """Decode CSV bytes as UTF-8, UTF-16 with a BOM, Big5, or GB18030."""
+    if payload.startswith((b"\xff\xfe", b"\xfe\xff")):
+        return payload.decode("utf-16")
+    try:
+        return payload.decode("utf-8-sig")
+    except UnicodeError:
+        pass
+    choices = []
+    for name in ("big5hkscs", "gb18030"):
+        try:
+            text = payload.decode(name)
+        except UnicodeError:
+            continue
+        if text not in choices:
+            choices.append(text)
+    if not choices:
+        raise ValueError("The CSV encoding could not be read. Save the file as UTF-8 and try again.")
+    if len(choices) == 1:
+        return choices[0]
+    return max(choices, key=_csv_text_score)
+
+
+def _csv_text_score(text: str) -> tuple:
+    lines = text.splitlines()
+    header = lines[0] if lines else ""
+    names = next(csv.reader([header]), [])
+    known = sum(1 for name in names if str(name).strip().casefold() in _HEADER_FIELDS)
+    ordinary = sum(1 for char in text if char in _COMMON_CJK)
+    return (known, ordinary)
 
 
 def write_csv_records(path: str, records: list) -> None:
@@ -119,6 +163,61 @@ def sanitize_records(records: list) -> tuple:
         cleaned.append(row)
         skipped += count
     return cleaned, skipped
+
+
+def preferred_pair(direction: str, record: dict) -> str | None:
+    """Use the selected coordinate pair, or the other pair when that one is incomplete."""
+    if direction != "hkgrid" and direction != "wgsgeog":
+        raise ValueError(f"Unknown direction {direction!r}.")
+    if _pair_ready(direction, record):
+        return direction
+    other = "wgsgeog" if direction == "hkgrid" else "hkgrid"
+    if _pair_ready(other, record):
+        return other
+    return None
+
+
+def _pair_ready(direction: str, record: dict) -> bool:
+    if direction == "hkgrid":
+        fields = ("northing", "easting")
+    elif direction == "wgsgeog":
+        fields = ("latitude", "longitude")
+    else:
+        raise ValueError(f"Unknown direction {direction!r}.")
+    return all(_is_number(record.get(field, "")) for field in fields)
+
+
+def _is_number(text) -> bool:
+    cleaned = str(text).strip()
+    if cleaned == "" or not is_coordinate_text(cleaned):
+        return False
+    try:
+        float(cleaned)
+    except ValueError:
+        return False
+    return True
+
+
+def publish_file(path: str, write) -> bool:
+    """Write beside the destination and replace it only after that write succeeds."""
+    directory = os.path.dirname(os.path.abspath(path)) or "."
+    os.makedirs(directory, exist_ok=True)
+    handle, temp = tempfile.mkstemp(prefix="hkmap-", suffix=".xlsx", dir=directory)
+    os.close(handle)
+    try:
+        os.remove(temp)
+        if not write(temp):
+            return False
+        os.replace(temp, path)
+        return True
+    except OSError:
+        return False
+    finally:
+        if os.path.exists(temp):
+            try:
+                os.remove(temp)
+            except OSError:
+                pass
 
 
 def format_number(value: float, places: int) -> str:

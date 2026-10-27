@@ -104,6 +104,10 @@ class SplitView(CompareView):
         parent = main.parentWidget()
         if parent is None:
             return False
+        stacked = parent if isinstance(parent, QStackedWidget) else None
+        layout = None if stacked is not None else parent.layout()
+        if stacked is None and layout is None:
+            return False
         self._parent = parent
         self._second = QgsMapCanvas()
         self._second.setObjectName("hkmapservicesSplitCanvas")
@@ -122,27 +126,18 @@ class SplitView(CompareView):
         self._splitter.setHandleWidth(4)
         self._splitter.setStretchFactor(0, 1)
         self._splitter.setStretchFactor(1, 1)
-        if isinstance(parent, QStackedWidget):
-            parent.removeWidget(main)
+        if stacked is not None:
+            stacked.removeWidget(main)
             self._splitter.addWidget(main)
             self._splitter.addWidget(self._second)
-            parent.addWidget(self._splitter)
-            self._stacked = parent
+            stacked.addWidget(self._splitter)
+            self._stacked = stacked
             self._mode = "stack"
             if not self._stack_hooked:
-                parent.currentChanged.connect(self._on_stack_changed)
+                stacked.currentChanged.connect(self._on_stack_changed)
                 self._stack_hooked = True
-            parent.setCurrentWidget(self._splitter)
+            stacked.setCurrentWidget(self._splitter)
         else:
-            layout = parent.layout()
-            if layout is None:
-                self._second.setParent(None)
-                self._second.deleteLater()
-                self._splitter.deleteLater()
-                self._second = None
-                self._splitter = None
-                self._pan = None
-                return False
             self._splitter.addWidget(main)
             self._splitter.addWidget(self._second)
             layout.addWidget(self._splitter)
@@ -183,6 +178,16 @@ class SplitView(CompareView):
         self._second = None
         self._pan = None
         if splitter is None or main is None:
+            self._restore_main_constraints()
+            if second is not None:
+                second.setParent(None)
+                second.deleteLater()
+            if splitter is not None:
+                splitter.hide()
+                splitter.deleteLater()
+            self._stacked = None
+            self._parent = None
+            self._mode = ""
             return
         _disconnect(splitter.splitterMoved, self._on_splitter_moved)
         splitter.removeEventFilter(self._hooks)

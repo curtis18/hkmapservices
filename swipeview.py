@@ -8,7 +8,17 @@ from qgis.PyQt.QtWidgets import QWidget
 from qgis.core import QgsMapRendererParallelJob, QgsMapSettings
 
 from .compare import CanvasOverride, CompareView, _disconnect, _layer_alive
-from .comparemath import clip_ranges, divider_hit, normalize_direction, side_opacity, swipe_handle_rect
+from .comparemath import (
+    DIVIDER_STROKES,
+    HANDLE_CREAM,
+    HANDLE_GREEN,
+    HANDLE_INK,
+    clip_ranges,
+    divider_hit,
+    normalize_direction,
+    side_opacity,
+    swipe_handle_rect,
+)
 
 
 class SwipeView(CompareView):
@@ -186,16 +196,10 @@ class _SwipeOverlay(QWidget):
         first, second, line = clip_ranges(self.width(), self.height(), self._view.settings.direction, self._view.settings.position)
         self._paint_side(painter, self._images.get("left"), first, "left")
         self._paint_side(painter, self._images.get("right"), second, "right")
-        pen = QPen(QColor("#1c4b3a"))
-        pen.setWidth(3)
-        painter.setPen(pen)
-        painter.drawLine(line[0], line[1], line[2], line[3])
+        _paint_divider(painter, line)
         direction = self._view.settings.direction
         handle = QRect(*swipe_handle_rect(self.width(), self.height(), direction, self._view.settings.position))
-        painter.setPen(_pen_style("NoPen"))
-        painter.setBrush(QColor("#1c4b3a"))
-        painter.drawRoundedRect(handle, 8, 8)
-        _paint_arrows(painter, handle, direction)
+        _paint_handle(painter, handle, direction)
 
     def _paint_side(self, painter, image, rect, side: str) -> None:
         if image is None or image.isNull():
@@ -244,10 +248,36 @@ def _rect(values):
     return QRect(*values)
 
 
+def _paint_divider(painter, line) -> None:
+    """Draw a dark, cream, and green stroke so the line shows on any map."""
+    x1, y1, x2, y2 = line
+    for color, width in DIVIDER_STROKES:
+        pen = QPen(QColor(color))
+        pen.setWidth(width)
+        pen.setCapStyle(_pen_cap("FlatCap"))
+        painter.setPen(pen)
+        painter.drawLine(x1, y1, x2, y2)
+
+
+def _paint_handle(painter, handle, direction: str) -> None:
+    """Draw the grip inside its rectangle: dark edge, cream edge, green center."""
+    painter.save()
+    painter.setRenderHint(_render_hint("Antialiasing"), True)
+    painter.setPen(_pen_style("NoPen"))
+    painter.setBrush(QColor(HANDLE_INK))
+    painter.drawRoundedRect(handle, 8, 8)
+    painter.setBrush(QColor(HANDLE_CREAM))
+    painter.drawRoundedRect(handle.adjusted(1, 1, -1, -1), 7, 7)
+    painter.setBrush(QColor(HANDLE_GREEN))
+    painter.drawRoundedRect(handle.adjusted(3, 3, -3, -3), 5, 5)
+    _paint_arrows(painter, handle, direction)
+    painter.restore()
+
+
 def _paint_arrows(painter, handle, direction: str) -> None:
     """Draw the leafmap-style grip: sideways arrows, or up and down arrows."""
     direction = normalize_direction(direction)
-    painter.setBrush(QColor("#f4f1e8"))
+    painter.setBrush(QColor(HANDLE_CREAM))
     painter.setPen(_pen_style("NoPen"))
     center = handle.center()
     if direction == "vertical":
@@ -280,6 +310,18 @@ def _pen_style(name: str):
     if hasattr(Qt, name):
         return getattr(Qt, name)
     return getattr(Qt.PenStyle, name)
+
+
+def _pen_cap(name: str):
+    if hasattr(Qt, name):
+        return getattr(Qt, name)
+    return getattr(Qt.PenCapStyle, name)
+
+
+def _render_hint(name: str):
+    if hasattr(QPainter, name):
+        return getattr(QPainter, name)
+    return getattr(QPainter.RenderHint, name)
 
 
 def _attribute(name: str):

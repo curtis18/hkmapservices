@@ -60,12 +60,15 @@ def grid_directory() -> str:
 
 
 def repair_grid_sources() -> None:
-    """Recreate HK80 tile XML and point saved layers at the current files."""
+    """Point saved HK80 layers at the current XML. Start the proxy only for vector tiles."""
     directory = grid_directory()
     paths = write_grid_files(directory)
-    base_url = proxy_base_url()
     project = QgsProject.instance()
-    for layer in project.mapLayers().values():
+    layers = list(project.mapLayers().values())
+    base_url = ""
+    if any(layer.customProperty("hkmapservices/vector_path") for layer in layers):
+        base_url = proxy_base_url()
+    for layer in layers:
         key = layer.customProperty("hkmapservices/grid_xml")
         if key:
             path = paths.get(str(key))
@@ -75,7 +78,7 @@ def repair_grid_sources() -> None:
                 layer.setDataSource(path, layer.name(), "gdal")
             continue
         service_path = layer.customProperty("hkmapservices/vector_path")
-        if service_path and base_url not in layer.source():
+        if service_path and base_url and base_url not in str(layer.source()):
             style_url = str(layer.customProperty("hkmapservices/vector_style") or "")
             uri = _vector_tile_uri(base_url + str(service_path), style_url)
             layer.setDataSource(uri, layer.name(), "arcgisvectortileservice")

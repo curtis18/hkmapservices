@@ -48,6 +48,15 @@ class CompareMathTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             comparemath.side_opacity(0.34, "both", "middle")
 
+    def test_handle_colors_meet_non_text_contrast(self) -> None:
+        self.assertGreaterEqual(comparemath.contrast_ratio(comparemath.HANDLE_CREAM, comparemath.HANDLE_GREEN), 3)
+        self.assertGreaterEqual(comparemath.contrast_ratio(comparemath.HANDLE_CREAM, comparemath.HANDLE_INK), 3)
+        self.assertEqual(comparemath.DIVIDER_STROKES, (
+            (comparemath.HANDLE_INK, 7),
+            (comparemath.HANDLE_CREAM, 5),
+            (comparemath.HANDLE_GREEN, 3),
+        ))
+
     def test_unknown_direction(self) -> None:
         with self.assertRaises(ValueError):
             comparemath.normalize_opacity_side("middle")

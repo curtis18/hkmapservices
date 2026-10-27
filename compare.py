@@ -303,6 +303,7 @@ def collect_sides(project=None) -> list:
                 sides.append(MapSide(f"layer:{layer.id()}", prefix + layer.name(), [layer.id()]))
 
     walk(root, "")
+    _disambiguate_labels(sides)
     return sides
 
 
@@ -316,13 +317,38 @@ def _group_layer_ids(group) -> list:
 
 
 def _group_key(group, root) -> str:
-    names = []
+    parts = []
     node = group
     while node is not None and node != root:
-        names.append(node.name())
-        node = node.parent()
-    names.reverse()
-    return "group:" + "/".join(names)
+        parent = node.parent()
+        index = _child_index(parent, node)
+        parts.append(f"{index}:{node.name()}")
+        node = parent
+    parts.reverse()
+    return "group:" + "/".join(parts)
+
+
+def _child_index(parent, node) -> int:
+    if parent is None:
+        return 0
+    children = parent.children()
+    for index, child in enumerate(children):
+        if child is node:
+            return index
+    return 0
+
+
+def _disambiguate_labels(sides: list) -> None:
+    counts = {}
+    for side in sides:
+        counts[side.label] = counts.get(side.label, 0) + 1
+    seen = {}
+    for side in sides:
+        if counts[side.label] < 2:
+            continue
+        seen[side.label] = seen.get(side.label, 0) + 1
+        if seen[side.label] > 1:
+            side.label = f"{side.label} ({seen[side.label]})"
 
 
 def _canvas_bridge(iface):

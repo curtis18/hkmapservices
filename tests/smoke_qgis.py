@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import sys
+import tempfile
 import traceback
 
 
@@ -39,7 +40,9 @@ def main() -> int:
     failures = []
     try:
         from qgis.PyQt.QtGui import QValidator
+        from qgis.PyQt.QtCore import Qt
         from qgis.PyQt.QtWidgets import (
+            QAction,
             QGraphicsOpacityEffect,
             QLabel,
             QStackedWidget,
@@ -56,18 +59,19 @@ def main() -> int:
             ConvertDialog,
             DecimalDelegate,
             add_converted_points,
+            _locate_record,
             added_message,
             load_coordinate_file,
             save_template,
         )
-        from hkmapservices.cursordock import CursorDock, _dms_copy_text, _dms_text
+        from hkmapservices.cursordock import CursorDock, _HOLD_SHORTCUT, _dms_copy_text, _dms_text
+        from hkmapservices.hkmapservices import _keep_hold_shortcut
         from hkmapservices.locationdialog import show_location
         from hkmapservices.splitview import SplitView
         from hkmapservices.swipeview import SwipeView
         from hkmapservices.coords import convert_values
         from hkmapservices.dialog import BasemapDialog, DatasetDialog
         from hkmapservices.layers import (
-            grid_directory,
             make_basemap_layer,
             make_dataset_layer,
             make_label_layer,
@@ -140,7 +144,8 @@ def main() -> int:
         if dataset_dialog._add_button.isEnabled():
             failures.append("Add to map stays enabled with nothing checked")
 
-        directory = grid_directory()
+        grid_files = tempfile.TemporaryDirectory()
+        directory = grid_files.name
         checks = (
             ("topographic", "WGS84", "EPSG:3857"),
             ("topographic", "HK80", "EPSG:2326"),
@@ -248,6 +253,27 @@ def main() -> int:
             or convert_dialog._table.cellWidget(0, 6) is not None
         ):
             failures.append("convert dialog row has no Add icon")
+        fly_item = convert_dialog._table.item(0, 7)
+        if fly_item is None or fly_item.text() or fly_item.toolTip() != "Fly to" or fly_item.icon().isNull():
+            failures.append("convert dialog row has no Fly icon")
+        if convert_dialog.layout().indexOf(convert_dialog._status) < convert_dialog.layout().indexOf(convert_dialog._table):
+            failures.append("convert status is not under the buttons")
+        convert_dialog._add_row()
+        if convert_dialog._status.text() != "Added a row." or "#d9f2df" not in convert_dialog._status.styleSheet():
+            failures.append("add row did not report success")
+        convert_dialog._show_status("Enter a northing and easting, or a latitude and longitude.", "error")
+        if "#f8d0d0" not in convert_dialog._status.styleSheet():
+            failures.append("convert failure is not red")
+        both_sides = {
+            "northing": "819069.8",
+            "easting": "836694.05",
+            "latitude": "22.0",
+            "longitude": "114.0",
+        }
+        grid_place = _locate_record(both_sides, "hkgrid")
+        geographic_place = _locate_record(both_sides, "wgsgeog")
+        if grid_place is None or grid_place[0] != "EPSG:2326" or geographic_place is None or geographic_place[0] != "EPSG:4326":
+            failures.append("a filled row ignored the selected transform direction")
         if not isinstance(convert_dialog._table.itemDelegateForColumn(1), DecimalDelegate):
             failures.append("northing column has no decimal delegate")
         editor = convert_dialog._decimal_delegate.createEditor(
@@ -257,7 +283,13 @@ def main() -> int:
         )
         invalid = QValidator.Invalid if hasattr(QValidator, "Invalid") else QValidator.State.Invalid
         acceptable = QValidator.Acceptable if hasattr(QValidator, "Acceptable") else QValidator.State.Acceptable
-        if editor.validator().validate("asdf", 0)[0] != invalid or editor.validator().validate("22.13", 0)[0] != acceptable:
+        dot_state = editor.validator().validate(".", 0)[0]
+        if (
+            editor.validator().validate("asdf", 0)[0] != invalid
+            or dot_state == acceptable
+            or editor.validator().validate(".5", 0)[0] != acceptable
+            or editor.validator().validate("22.13", 0)[0] != acceptable
+        ):
             failures.append("coordinate editor accepted a non-decimal")
         editor.deleteLater()
         convert_dialog._write_row(
@@ -305,7 +337,7 @@ def main() -> int:
             or loaded_add.icon().isNull()
         ):
             failures.append("a long coordinate table did not finish loading")
-        if convert_dialog._table.cellWidget(249, 6) is not None:
+        if convert_dialog._table.cellWidget(249, 6) is not None or convert_dialog._table.item(249, 7) is None:
             failures.append("a long coordinate table built a button for every row")
 
         geographic_layer, geographic_ids, geographic_skipped = add_converted_points(
@@ -357,10 +389,14 @@ def main() -> int:
         except ValueError as exc:
             failures.append(str(exc))
         else:
-            xlsx_records, _truncated = load_coordinate_file(written_xlsx)
-            print("xlsx template", written_xlsx, xlsx_records[:1])
-            if not xlsx_records or abs(float(xlsx_records[0].get("northing", "nan")) - 819069.8) > 0.001:
-                failures.append(f"Excel template is {xlsx_records[:1]}")
+            try:
+                xlsx_records, _truncated = load_coordinate_file(written_xlsx)
+            except ValueError as exc:
+                failures.append(str(exc))
+            else:
+                print("xlsx template", written_xlsx, xlsx_records[:1])
+                if not xlsx_records or abs(float(xlsx_records[0].get("northing", "nan")) - 819069.8) > 0.001:
+                    failures.append(f"Excel template is {xlsx_records[:1]}")
 
         first_place = {
             "name_en": "HONG KONG CULTURAL CENTRE",
@@ -406,6 +442,37 @@ def main() -> int:
             failures.append(f"DMS copy button is {cursor._latitude_dms_button.property('copy_text')!r}")
         cursor.unload()
 
+        hold_window = QWidget()
+        hold_action = QAction(f"Hold ({_HOLD_SHORTCUT})", hold_window)
+        hold_action.setObjectName("hkmapservicesHold")
+        hold_action.setCheckable(True)
+        hold_action.setShortcut("Ctrl+Alt+H")
+        _keep_hold_shortcut(hold_action)
+        application_shortcut = (
+            Qt.ApplicationShortcut if hasattr(Qt, "ApplicationShortcut") else Qt.ShortcutContext.ApplicationShortcut
+        )
+        if (
+            hold_action not in hold_window.actions()
+            or hold_action.shortcut().toString() != _HOLD_SHORTCUT
+            or hold_action.autoRepeat()
+            or hold_action.shortcutContext() != application_shortcut
+        ):
+            failures.append("Hold shortcut is not installed on the window")
+        held_cursor = CursorDock(_Iface())
+        held_cursor.bind_hold(hold_action)
+        held_cursor._northing_value = 819069.8
+        held_cursor._easting_value = 836694.05
+        held_cursor._latitude_value = 22.31060243
+        held_cursor._longitude_value = 114.18100933
+        hold_action.setChecked(True)
+        if not held_cursor._held or held_cursor._hold_button.text() != f"Hold ({_HOLD_SHORTCUT})":
+            failures.append("Hold shortcut did not freeze the cursor")
+        else:
+            held_cursor._on_xy(QgsPointXY(0, 0))
+            if held_cursor._northing_value != 819069.8 or held_cursor._latitude_value != 22.31060243:
+                failures.append("a held cursor reading changed")
+        held_cursor.unload()
+
         split_view = SplitView(_Iface())
         split_view.set_position(25)
         if split_view.settings.position != 50:
@@ -427,6 +494,17 @@ def main() -> int:
         group_side = sides.get("Group: Compare group")
         if group_side != [grouped.id()] or "Loose point" not in sides:
             failures.append(f"compare choices are {sorted(sides)}")
+        first_twin = root.addGroup("Twin")
+        second_twin = root.addGroup("Twin")
+        first_layer = QgsVectorLayer("Point?crs=EPSG:4326", "Twin one", "memory")
+        second_layer = QgsVectorLayer("Point?crs=EPSG:4326", "Twin two", "memory")
+        QgsProject.instance().addMapLayer(first_layer, False)
+        QgsProject.instance().addMapLayer(second_layer, False)
+        first_twin.addLayer(first_layer)
+        second_twin.addLayer(second_layer)
+        twins = [side for side in collect_sides() if side.label.startswith("Group: Twin")]
+        if len(twins) != 2 or twins[0].key == twins[1].key or not any(side.label.endswith(" (2)") for side in twins):
+            failures.append(f"duplicate groups are {[side.label + ' ' + side.key for side in twins]}")
         grouped.setOpacity(0.8)
         swipe_view._settings.opacity = 0.34
         swipe_view._settings.opacity_side = "right"
@@ -487,12 +565,15 @@ def main() -> int:
             "Curtis Yung" not in about._info.text()
             or "<b>Developer:</b>" not in about._info.text()
             or "Swipe and Split" not in about._info.text()
-            or not license_text.startswith("GNU GENERAL PUBLIC LICENSE")
+            or not license_text.splitlines()[0].endswith("GNU GENERAL PUBLIC LICENSE")
+            or not license_text.startswith(" ")
             or license_text.startswith("Hong Kong Map Services")
         ):
             failures.append("about dialog is missing the developer, the description, or the GNU heading")
         if not about._license.font().fixedPitch():
             failures.append("license text is not fixed width")
+        if about.minimumWidth() != 552:
+            failures.append(f"about dialog width is {about.minimumWidth()}")
         icon = about._icon.pixmap()
         if icon is None or icon.isNull():
             failures.append("about dialog has no icon")

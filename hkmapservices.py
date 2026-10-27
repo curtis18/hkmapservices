@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import os
 
-from qgis.PyQt.QtCore import Qt
+from qgis.PyQt.QtCore import Qt, QTimer
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction, QDockWidget, QMenu, QToolButton
-from qgis.core import QgsProject
+from qgis.core import Qgis, QgsProject
+from qgis.gui import QgsGui
 
 from .aboutdialog import AboutDialog
 from .comparedock import CompareDock
 from .convertdialog import ConvertDialog
-from .cursordock import CursorDock
+from .cursordock import CursorDock, _HOLD_SHORTCUT, _REPLACED_HOLD_SHORTCUTS
 from .dialog import BasemapDialog, DatasetDialog
 from .locationdialog import LocationDialog
 from .layers import add_basemap, add_datasets, repair_grid_sources, shutdown_background_services
@@ -37,6 +38,9 @@ class HkMapServices:
         self.tool_button = None
         self.toolbar_action = None
         self.dialog = None
+        self.convert_dialog = None
+        self.location_dialog = None
+        self._alive = True
         self.cursor_dock = None
         self.swipe_view = None
         self.split_view = None
@@ -67,10 +71,11 @@ class HkMapServices:
         self.about_action = QAction(_load_icon("icon_about.png"), "About", window)
         self.about_action.setObjectName("hkmapservicesAbout")
         self.about_action.triggered.connect(self.run_about)
-        self.hold_action = QAction("Hold (Ctrl+Shift+H)", window)
+        self.hold_action = QAction(f"Hold ({_HOLD_SHORTCUT})", window)
         self.hold_action.setObjectName("hkmapservicesHold")
         self.hold_action.setCheckable(True)
-        self.iface.registerMainWindowAction(self.hold_action, "Ctrl+Shift+H")
+        self.iface.registerMainWindowAction(self.hold_action, _HOLD_SHORTCUT)
+        _keep_hold_shortcut(self.hold_action)
         self.hold_action.toggled.connect(self._on_hold_toggled)
 
         for action in self._ordered_actions():
@@ -90,15 +95,26 @@ class HkMapServices:
         self.tool_button.setMenu(menu)
         self.toolbar_action = self.iface.addToolBarWidget(self.tool_button)
 
-        QgsProject.instance().readProject.connect(self._on_project_read)
-        repair_grid_sources()
+        project = QgsProject.instance()
+        project.readProject.connect(self._on_project_read)
+        project.cleared.connect(self._on_project_cleared)
+        self._repair_grids()
 
     def unload(self) -> None:
+        self._alive = False
         project = QgsProject.instance()
         try:
             project.readProject.disconnect(self._on_project_read)
         except TypeError:
             pass
+        try:
+            project.cleared.disconnect(self._on_project_cleared)
+        except TypeError:
+            pass
+        self._close_dialog(self.convert_dialog)
+        self._close_dialog(self.location_dialog)
+        self.convert_dialog = None
+        self.location_dialog = None
         for action in self._ordered_actions():
             if action is not None:
                 self.iface.removePluginWebMenu("&Hong Kong Map Services", action)
@@ -116,6 +132,9 @@ class HkMapServices:
             except TypeError:
                 pass
             self.iface.unregisterMainWindowAction(self.hold_action)
+            window = self.iface.mainWindow()
+            if window is not None and self.hold_action in window.actions():
+                window.removeAction(self.hold_action)
             self.hold_action = None
         if self.compare_dock is not None:
             self.compare_dock.shutdown()
@@ -149,12 +168,14 @@ class HkMapServices:
             add_datasets(self.iface, self.dialog.request())
 
     def run_convert(self) -> None:
-        self.dialog = ConvertDialog(self.iface.mainWindow())
-        self.dialog.show()
+        if self.convert_dialog is None:
+            self.convert_dialog = ConvertDialog(self.iface.mainWindow())
+        self._show_dialog(self.convert_dialog)
 
     def run_location(self) -> None:
-        self.dialog = LocationDialog(self.iface)
-        self.dialog.show()
+        if self.location_dialog is None:
+            self.location_dialog = LocationDialog(self.iface)
+        self._show_dialog(self.location_dialog)
 
     def run_about(self) -> None:
         self.dialog = AboutDialog(self.iface.mainWindow())
@@ -244,7 +265,42 @@ class HkMapServices:
             self.iface.removePluginWebMenu("&Hong Kong Map Services", self.about_action)
 
     def _on_project_read(self, *_args) -> None:
-        repair_grid_sources()
+        self._stop_compare()
+        QTimer.singleShot(0, self._repair_grids)
+
+    def _on_project_cleared(self) -> None:
+        self._stop_compare()
+
+    def _stop_compare(self) -> None:
+        if self.compare_dock is not None:
+            self.compare_dock.mark_stopped()
+
+    def _repair_grids(self) -> None:
+        if not self._alive:
+            return
+        try:
+            repair_grid_sources()
+        except OSError as exc:
+            self._warn(f"The vector tile proxy did not start. {exc}")
+
+    def _warn(self, text: str) -> None:
+        finder = getattr(self.iface, "messageBar", None)
+        if not callable(finder):
+            return
+        bar = finder()
+        if bar is None:
+            return
+        level = Qgis.Warning if hasattr(Qgis, "Warning") else Qgis.MessageLevel.Warning
+        bar.pushMessage("Hong Kong Map Services", text, level, 8)
+
+    def _show_dialog(self, dialog) -> None:
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _close_dialog(self, dialog) -> None:
+        if dialog is not None:
+            dialog.close()
 
 
 def _accepted(dialog) -> bool:
@@ -268,6 +324,36 @@ def _orientation(name: str):
     if hasattr(Qt, name):
         return getattr(Qt, name)
     return getattr(Qt.Orientation, name)
+
+
+def _keep_hold_shortcut(action) -> None:
+    """Give Hold a free key and install it on the main window.
+
+    Registration only lists the key under Keyboard Shortcuts. The action also
+    has to be added to the window, or pressing it does not freeze the cursor.
+    """
+    current = action.shortcut().toString().replace(" ", "")
+    if current in ("",) + _REPLACED_HOLD_SHORTCUTS:
+        _assign_hold_shortcut(action, _HOLD_SHORTCUT)
+    action.setAutoRepeat(False)
+    action.setShortcutContext(_shortcut_context("ApplicationShortcut"))
+    window = action.parent()
+    if window is not None and action not in window.actions():
+        window.addAction(action)
+
+
+def _assign_hold_shortcut(action, sequence: str) -> None:
+    manager = QgsGui.shortcutsManager()
+    if manager is not None and action in manager.listActions():
+        manager.setKeySequence(action, sequence)
+        return
+    action.setShortcut(sequence)
+
+
+def _shortcut_context(name: str):
+    if hasattr(Qt, name):
+        return getattr(Qt, name)
+    return getattr(Qt.ShortcutContext, name)
 
 
 def _load_icon(filename: str) -> QIcon:

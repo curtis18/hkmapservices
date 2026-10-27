@@ -41,11 +41,11 @@ Names follow the language selected in that dialog. Turn on **View → Map Tips**
 
 ## Convert Coordinates
 
-**Convert Coordinates** transforms between HK1980 Grid and WGS84 geographic coordinates on this computer, using the same map projection as QGIS. The columns are Point ID, Northing (m), Easting (m), Latitude, Longitude, and Remarks. Northing, Easting, Latitude, and Longitude accept only digits and one dot. A loaded cell such as `asdf` is cleared, and the dialog says how many cells were skipped. Point ID and Remarks stay free text. Type rows, or load a CSV, XLS, or XLSX file. Column names are matched without regard to letter case, so an older file with Easting before Northing still loads. **Download template** saves a sample `.xlsx` file in that column order. **Transform** fills the other side of each row and says when it is finished. Click the add icon on a row, or **Add all points**, to put the coordinates on the map in a layer named Converted points. The dialog says Added 1 point. for one point, and Added 3 points. when more than one is added. **Save XLSX** writes the table as Excel.
+**Convert Coordinates** transforms between HK1980 Grid and WGS84 geographic coordinates on this computer, using the same map projection as QGIS. The columns are Point ID, Northing (m), Easting (m), Latitude, Longitude, and Remarks. Northing, Easting, Latitude, and Longitude accept digits and one dot, and a cell with only a dot is cleared. A loaded cell such as `asdf` is cleared. Results appear on the colored line under the buttons: green when the action finished, amber when something was left out, and red when it did not. Point ID and Remarks stay free text. Type rows, or load a CSV, XLS, or XLSX file. A CSV may be UTF-8, Big5, or GB2312. Column names are matched without regard to letter case, so an older file with Easting before Northing still loads. **Download template** saves a sample `.xlsx` file in that column order. **Transform** fills the other side of each row and the line says Transform finished. Click the add icon on a row, or **Add all points**, to put the coordinates on the map in a layer named Converted points. The line says Added 1 point. for one point, and Added 3 points. when more than one is added. **Map** adds the point. **Fly**, in the next column, moves the map to that row and does not add a point. The line says when the map has moved. Both follow the Transform direction, and use the other coordinate pair only when the selected pair is incomplete. **Save XLSX** writes the table as Excel and leaves the previous file in place if the new file cannot be written.
 
 ## Cursor Coordinates
 
-**Cursor Coordinates** opens a dock. Moving the mouse over the map shows HK1980 Grid northing and easting, and WGS84 latitude and longitude. Under each latitude and longitude, the same line ends with `(DMS)`, for example `22° 21' 13.32" (DMS)`. Those rows use the same spacing as Northing and Easting. **Settings** chooses the decimal places. HK1980 starts at 0 decimal places, rounded. Latitude and longitude start at 6. **Hold (Ctrl+Shift+H)** keeps the numbers still while the mouse moves. The same shortcut works while the map has focus. One press stays on until the next press, and the status says **Held**. **Copy** on each row copies that number only: northing and easting without `m`, latitude and longitude without the degree sign, and a DMS row as `22° 21' 13.32"` without the `(DMS)` word. Close the dock, or choose the menu item again, to hide it. The dock uses the same local calculation as **Convert Coordinates**.
+**Cursor Coordinates** opens a dock. Moving the mouse over the map shows HK1980 Grid northing and easting, and WGS84 latitude and longitude. Under each latitude and longitude, the same line ends with `(DMS)`, for example `22° 21' 13.32" (DMS)`. Those rows use the same spacing as Northing and Easting. **Settings** chooses the decimal places. HK1980 starts at 0 decimal places, rounded. Latitude and longitude start at 6. **Hold (Ctrl+Alt+Shift+H)** keeps the numbers still while the mouse moves. Ctrl+Shift+H stays QGIS Hide All Layers, and Ctrl+Alt+H stays Processing History. The same shortcut works while the map has focus. One press stays on until the next press, and the status says **Held**. **Copy** on each row copies that number only: northing and easting without `m`, latitude and longitude without the degree sign, and a DMS row as `22° 21' 13.32"` without the `(DMS)` word. Close the dock, or choose the menu item again, to hide it. The dock uses the same local calculation as **Convert Coordinates**.
 
 ## Location Search
 
@@ -67,7 +67,7 @@ In Split mode, a second map opens in the same project. Vertical places the maps 
 
 ## Install
 
-Tested with QGIS 3.34.13. `qgisMaximumVersion` is 4.99, so the same plugin remains listed after a later QGIS upgrade.
+The minimum QGIS version is 3.28. Tested with QGIS 3.34.13 and QGIS 4.2.3. `qgisMaximumVersion` is 4.99, so the same plugin remains listed after a later QGIS upgrade.
 
 Copy this folder to the QGIS profile plugins directory:
 
@@ -75,9 +75,7 @@ Copy this folder to the QGIS profile plugins directory:
 %APPDATA%\QGIS\QGIS3\profiles\default\python\plugins\hkmapservices
 ```
 
-Restart QGIS, then enable **Hong Kong Map Services** in **Plugins → Manage and Install Plugins**.
-
-Replace `email` in `metadata.txt` before uploading the plugin to plugins.qgis.org.
+Restart QGIS, then enable **Hong Kong Map Services** in **Plugins → Manage and Install Plugins**. On QGIS 4 the profile folder uses `QGIS4` instead of `QGIS3`.
 
 ## Attribution
 
@@ -104,7 +102,7 @@ python tests\test_locations.py
 python tests\test_compare.py
 ```
 
-Layer checks use the QGIS 3.34.13 launcher `bin\python-qgis-ltr.bat` and `tests\smoke_qgis.py`.
+Layer checks use `tests\smoke_qgis.py` with the QGIS 3.34.13 launcher `bin\python-qgis-ltr.bat` and the QGIS 4.2.3 launcher.
 
 ## License
 

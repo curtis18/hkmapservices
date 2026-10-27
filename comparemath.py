@@ -62,6 +62,36 @@ def clip_ranges(width: int, height: int, direction: str, position: int) -> tuple
 
 SWIPE_HANDLE_WIDTH = 44
 SWIPE_HANDLE_HEIGHT = 36
+HANDLE_INK = "#10241c"
+HANDLE_CREAM = "#f4f1e8"
+HANDLE_GREEN = "#1c4b3a"
+DIVIDER_STROKES = (
+    (HANDLE_INK, 7),
+    (HANDLE_CREAM, 5),
+    (HANDLE_GREEN, 3),
+)
+
+
+def contrast_ratio(first: str, second: str) -> float:
+    """WCAG contrast ratio between two #rrggbb colors."""
+    lighter = max(_relative_luminance(first), _relative_luminance(second))
+    darker = min(_relative_luminance(first), _relative_luminance(second))
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def _relative_luminance(color: str) -> float:
+    text = color[1:] if color.startswith("#") else color
+    if len(text) != 6:
+        raise ValueError(f"Unknown color {color!r}.")
+    channels = tuple(int(text[index:index + 2], 16) / 255 for index in (0, 2, 4))
+    red, green, blue = (_srgb_channel(channel) for channel in channels)
+    return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+
+
+def _srgb_channel(value: float) -> float:
+    if value <= 0.04045:
+        return value / 12.92
+    return ((value + 0.055) / 1.055) ** 2.4
 
 
 def swipe_handle_rect(width: int, height: int, direction: str, position: int) -> tuple:

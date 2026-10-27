@@ -28,7 +28,7 @@ class AboutDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("About Hong Kong Map Services")
-        self.setMinimumWidth(460)
+        self.setMinimumWidth(552)
         metadata = _read_metadata()
 
         layout = QVBoxLayout(self)
@@ -114,18 +114,28 @@ def _read_license() -> str:
     start = text.find(heading)
     if start < 0:
         raise ValueError("The GNU license heading is missing.")
-    return text[start:]
+    line_start = text.rfind("\n", 0, start) + 1
+    return text[line_start:]
 
 
 def _license_font() -> QFont:
     """Fixed-width font so the license's own spaces center the heading."""
-    if "Consolas" in QFontDatabase().families():
+    if "Consolas" in _font_families():
         font = QFont("Consolas")
     else:
         font = QFontDatabase.systemFont(_fixed_font())
     font.setFixedPitch(True)
     font.setStyleHint(_font_style("Monospace"))
     return font
+
+
+def _font_families():
+    """Qt 6 lists families on the class. Qt 5 lists them on an object."""
+    families = getattr(QFontDatabase, "families")
+    try:
+        return families()
+    except TypeError:
+        return QFontDatabase().families()
 
 
 def _fixed_font():

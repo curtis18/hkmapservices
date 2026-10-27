@@ -26,7 +26,8 @@ from .transform import format_dms, format_rounded
 
 _GRID_KEY = "hkmapservices/cursor_grid_decimals"
 _GEO_KEY = "hkmapservices/cursor_geo_decimals"
-_HOLD_SHORTCUT = "Ctrl+Shift+H"
+_HOLD_SHORTCUT = "Ctrl+Alt+Shift+H"
+_REPLACED_HOLD_SHORTCUTS = ("Ctrl+Shift+H", "Ctrl+Alt+H")
 
 
 class CursorDock(QDockWidget):
@@ -98,8 +99,17 @@ class CursorDock(QDockWidget):
     def bind_hold(self, action) -> None:
         """Share the checked state with the main-window Hold action."""
         self._hold_action = action
+        self._sync_hold_button()
+        action.changed.connect(self._sync_hold_button)
         action.toggled.connect(self._apply_hold)
         self._apply_hold(action.isChecked())
+
+    def _sync_hold_button(self) -> None:
+        action = self._hold_action
+        if action is None:
+            return
+        sequence = action.shortcut().toString().replace(" ", "")
+        self._hold_button.setText(f"Hold ({sequence})" if sequence else "Hold")
 
     def toggle_hold(self) -> None:
         self._hold_button.setChecked(not self._hold_button.isChecked())
@@ -108,12 +118,27 @@ class CursorDock(QDockWidget):
         self._disconnect_canvas()
         super().closeEvent(event)
 
+    def hideEvent(self, event) -> None:
+        self._disconnect_canvas()
+        super().hideEvent(event)
+
     def showEvent(self, event) -> None:
         self._connect_canvas()
         super().showEvent(event)
 
     def unload(self) -> None:
         self._disconnect_canvas()
+        action = self._hold_action
+        if action is None:
+            return
+        try:
+            action.changed.disconnect(self._sync_hold_button)
+        except TypeError:
+            pass
+        try:
+            action.toggled.disconnect(self._apply_hold)
+        except TypeError:
+            pass
 
     def _connect_canvas(self) -> None:
         if self._listening:

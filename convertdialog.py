@@ -13,7 +13,6 @@ from qgis.PyQt.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QMessageBox,
     QPushButton,
     QStyledItemDelegate,
     QTableWidget,
@@ -38,12 +37,15 @@ from qgis.utils import iface
 from .config import HK1980, WGS84
 from .coords import convert_values, transform_xy
 from .transform import (
+    COORDINATE_PATTERN,
     CSV_HEADERS,
     DIRECTIONS,
     MAX_POINTS,
     TEMPLATE_RECORD,
-    format_number,
+    format_rounded,
     is_coordinate_text,
+    preferred_pair,
+    publish_file,
     normalize_record,
     read_csv_records,
     sanitize_records,
@@ -54,6 +56,7 @@ _TITLE = "Convert Coordinates"
 _COLUMNS = CSV_HEADERS
 _FIELDS = ("point_id", "northing", "easting", "latitude", "longitude", "remarks")
 _MAP_COLUMN = len(_COLUMNS)
+_FLY_COLUMN = _MAP_COLUMN + 1
 _NUMERIC_COLUMNS = (1, 2, 3, 4)
 _LAYER_ROLE = "converted-points"
 _LAYER_NAME = "Converted points"
@@ -68,9 +71,13 @@ class ConvertDialog(QDialog):
         self.setWindowTitle(_TITLE)
         self.setMinimumSize(860, 460)
         self._fill_token = 0
+        self._fill_purpose = "replace"
+        self._after_fill = None
         self._pending_records = []
         self._pending_row = 0
         self._rejected_cells = 0
+        self._load_truncated = False
+        self._load_count = 0
 
         layout = QVBoxLayout(self)
         intro = QLabel(
@@ -87,14 +94,15 @@ class ConvertDialog(QDialog):
         direction_row.addWidget(self._direction, 1)
         layout.addLayout(direction_row)
 
-        self._table = QTableWidget(1, len(_COLUMNS) + 1)
-        self._table.setHorizontalHeaderLabels(list(_COLUMNS) + ["Map"])
+        self._table = QTableWidget(1, _FLY_COLUMN + 1)
+        self._table.setHorizontalHeaderLabels(list(_COLUMNS) + ["Map", "Fly"])
         header = self._table.horizontalHeader()
         stretch = header.Stretch if hasattr(header, "Stretch") else header.ResizeMode.Stretch
         contents = header.ResizeToContents if hasattr(header, "ResizeToContents") else header.ResizeMode.ResizeToContents
         for column in range(len(_COLUMNS)):
             header.setSectionResizeMode(column, stretch)
         header.setSectionResizeMode(_MAP_COLUMN, contents)
+        header.setSectionResizeMode(_FLY_COLUMN, contents)
         self._table.setIconSize(QSize(16, 16))
         self._decimal_delegate = DecimalDelegate(self._table)
         for column in _NUMERIC_COLUMNS:
@@ -103,9 +111,6 @@ class ConvertDialog(QDialog):
         self._table.cellClicked.connect(self._on_map_cell)
         self._table.itemChanged.connect(self._reject_coordinate_text)
         layout.addWidget(self._table)
-        self._status = QLabel("")
-        self._status.setWordWrap(True)
-        layout.addWidget(self._status)
 
         file_buttons = QHBoxLayout()
         add_row = QPushButton("Add row")
@@ -132,15 +137,23 @@ class ConvertDialog(QDialog):
         for button in (transform, add_all, save, close):
             action_buttons.addWidget(button)
         layout.addLayout(action_buttons)
+        self._status = QLabel("")
+        self._status.setWordWrap(True)
+        layout.addWidget(self._status)
 
     def closeEvent(self, event) -> None:
         self._fill_token += 1
         super().closeEvent(event)
 
     def _add_row(self) -> None:
+        self._insert_empty_row(True)
+
+    def _insert_empty_row(self, announce: bool) -> None:
         row = self._table.rowCount()
         self._table.insertRow(row)
         self._write_row(row, _empty_record())
+        if announce:
+            self._show_status("Added a row.", "ok")
 
     def _remove_row(self) -> None:
         row = self._table.currentRow()
@@ -149,7 +162,8 @@ class ConvertDialog(QDialog):
         if row >= 0:
             self._table.removeRow(row)
         if self._table.rowCount() == 0:
-            self._add_row()
+            self._insert_empty_row(False)
+        self._show_status("Removed a row.", "ok")
 
     def _load_file(self) -> None:
         path, _selected = QFileDialog.getOpenFileName(
@@ -163,20 +177,17 @@ class ConvertDialog(QDialog):
         try:
             records, truncated = load_coordinate_file(path)
         except ValueError as exc:
-            QMessageBox.warning(self, _TITLE, str(exc))
+            self._show_status(str(exc), "error")
             return
         if not records:
             records = [_empty_record()]
+            self._load_count = 0
+        else:
+            self._load_count = len(records)
         records, rejected = sanitize_records(records)
         self._rejected_cells = rejected
-        self._status.setText("Loading...")
-        self._fill_table(records)
-        if truncated:
-            QMessageBox.information(
-                self,
-                _TITLE,
-                f"Only the first {MAX_POINTS} rows were loaded.",
-            )
+        self._load_truncated = truncated
+        self._fill_table(records, "load")
 
     def _download_template(self) -> None:
         path, _selected = QFileDialog.getSaveFileName(
@@ -192,7 +203,9 @@ class ConvertDialog(QDialog):
         try:
             save_template(path)
         except ValueError as exc:
-            QMessageBox.warning(self, _TITLE, str(exc))
+            self._show_status(str(exc), "error")
+            return
+        self._show_status("Template saved.", "ok")
 
     def _transform_rows(self) -> None:
         direction = self._direction.currentData()
@@ -210,41 +223,50 @@ class ConvertDialog(QDialog):
             else:
                 for key, value in result.items():
                     places = 3 if key in ("easting", "northing") else 8
-                    record[key] = format_number(value, places)
+                    record[key] = format_rounded(value, places)
         if used == 0:
-            QMessageBox.information(self, _TITLE, "Enter at least one coordinate.")
+            self._show_status("Enter at least one coordinate.", "error")
             return
-        self._fill_table(records)
+        self._rejected_cells = 0
         if failed:
-            QMessageBox.warning(
-                self,
-                _TITLE,
-                f"{failed} row(s) could not be converted.",
-            )
-            return
-        QMessageBox.information(self, _TITLE, "Transform finished.")
+            notice = (f"{failed} row(s) could not be converted.", "error")
+        else:
+            notice = ("Transform finished.", "ok")
+        self._fill_table(records, after=notice)
 
     def _add_all_points(self) -> None:
         self._add_records(self._records())
 
     def _on_map_cell(self, row: int, column: int) -> None:
-        if column != _MAP_COLUMN:
+        if row < 0 or row >= self._table.rowCount():
             return
-        records = self._records()
-        if 0 <= row < len(records):
-            self._add_records([records[row]])
+        if column == _MAP_COLUMN:
+            self._add_records([self._record(row)])
+            return
+        if column == _FLY_COLUMN:
+            self._fly_to_row(row)
+
+    def _fly_to_row(self, row: int) -> None:
+        try:
+            place = _locate_record(self._record(row), self._direction.currentData())
+        except (ValueError, QgsCsException):
+            place = None
+        if place is None:
+            self._show_status("Enter a northing and easting, or a latitude and longitude.", "error")
+            return
+        if not fly_to_place(*place):
+            self._show_status("The map could not move to that coordinate.", "error")
+            return
+        self._show_status("Moved the map to that coordinate.", "ok")
 
     def _add_records(self, records) -> None:
-        _layer, added, skipped = add_converted_points(records)
+        _layer, added, skipped = add_converted_points(records, self._direction.currentData())
         count = len(added)
         if count == 0:
-            QMessageBox.information(
-                self,
-                _TITLE,
-                "Enter a northing and easting, or a latitude and longitude.",
-            )
+            self._show_status("Enter a northing and easting, or a latitude and longitude.", "error")
             return
-        QMessageBox.information(self, _TITLE, added_message(count, skipped))
+        kind = "warn" if skipped else "ok"
+        self._show_status(added_message(count, skipped), kind)
 
     def _save_xlsx(self) -> None:
         path, _selected = QFileDialog.getSaveFileName(
@@ -258,19 +280,26 @@ class ConvertDialog(QDialog):
         if not path.casefold().endswith(".xlsx"):
             path = path + ".xlsx"
         if not write_xlsx_records(path, self._records()):
-            QMessageBox.warning(self, _TITLE, "Excel could not be written.")
+            self._show_status(
+                "Excel could not be written. Close the file if it is open in another program, then try again.",
+                "error",
+            )
+            return
+        self._show_status("Excel file saved.", "ok")
+
+    def _record(self, row: int) -> dict:
+        record = {}
+        for column, field in enumerate(_FIELDS):
+            item = self._table.item(row, column)
+            record[field] = "" if item is None else item.text().strip()
+        return record
 
     def _records(self) -> list:
-        records = []
-        for row in range(self._table.rowCount()):
-            record = {}
-            for column, field in enumerate(_FIELDS):
-                item = self._table.item(row, column)
-                record[field] = "" if item is None else item.text().strip()
-            records.append(record)
-        return records
+        return [self._record(row) for row in range(self._table.rowCount())]
 
-    def _fill_table(self, records) -> None:
+    def _fill_table(self, records, purpose: str = "replace", after=None) -> None:
+        self._fill_purpose = _fill_purpose(purpose)
+        self._after_fill = after
         self._fill_token += 1
         token = self._fill_token
         self._pending_records = list(records)
@@ -279,7 +308,7 @@ class ConvertDialog(QDialog):
         self._table.blockSignals(True)
         self._table.setRowCount(len(self._pending_records))
         if len(self._pending_records) > _FILL_BATCH:
-            self._status.setText("Loading...")
+            self._show_status("Loading...", "plain")
         self._fill_batch(token)
 
     def _fill_batch(self, token: int) -> None:
@@ -296,13 +325,17 @@ class ConvertDialog(QDialog):
         self._table.setUpdatesEnabled(True)
         rejected = self._rejected_cells
         self._rejected_cells = 0
-        if rejected:
-            message = f"{rejected} coordinate cell(s) were cleared. Use digits and one dot."
-            self._status.setText(message)
-            if self.isVisible():
-                QMessageBox.information(self, _TITLE, message)
+        if self._fill_purpose == "load":
+            self._show_load_result(rejected)
             return
-        self._status.setText("")
+        notice = self._after_fill
+        self._after_fill = None
+        if notice is not None:
+            text, kind = notice
+            self._show_status(text, kind)
+            return
+        if self._status.text() == "Loading...":
+            self._show_status("", "plain")
 
     def _reject_coordinate_text(self, item) -> None:
         if item.column() not in _NUMERIC_COLUMNS:
@@ -317,7 +350,7 @@ class ConvertDialog(QDialog):
         self._table.blockSignals(True)
         item.setText("")
         self._table.blockSignals(False)
-        self._status.setText("Coordinates can contain only digits and a dot.")
+        self._show_status("Coordinates can contain only digits and a dot.", "error")
 
     def _write_row(self, row: int, record: dict) -> None:
         for column, field in enumerate(_FIELDS):
@@ -327,12 +360,27 @@ class ConvertDialog(QDialog):
                 if not is_coordinate_text(value):
                     value = ""
             self._table.setItem(row, column, QTableWidgetItem(value))
-        add_item = QTableWidgetItem()
-        add_item.setIcon(_add_icon())
-        add_item.setToolTip("Add")
-        add_item.setTextAlignment(_alignment("AlignCenter"))
-        add_item.setFlags(add_item.flags() & ~_item_flag("ItemIsEditable"))
-        self._table.setItem(row, _MAP_COLUMN, add_item)
+        self._table.setItem(row, _MAP_COLUMN, _action_item(_icon("icon_add.png"), "Add"))
+        self._table.setItem(row, _FLY_COLUMN, _action_item(_icon("icon_fly.png"), "Fly to"))
+
+    def _show_load_result(self, rejected: int) -> None:
+        if self._load_count == 0:
+            self._show_status("The file had no rows.", "warn")
+            return
+        parts = []
+        if self._load_truncated:
+            parts.append(f"Only the first {MAX_POINTS} rows were loaded.")
+        if rejected:
+            parts.append(f"{rejected} coordinate cell(s) were cleared. Use digits and one dot.")
+        if parts:
+            self._show_status(" ".join(parts), "warn")
+            return
+        noun = "row" if self._load_count == 1 else "rows"
+        self._show_status(f"Loaded {self._load_count} {noun}.", "ok")
+
+    def _show_status(self, text: str, kind: str) -> None:
+        self._status.setText(text)
+        self._status.setStyleSheet("" if text == "" else _status_style(kind))
 
 
 def load_coordinate_file(path: str) -> tuple:
@@ -358,9 +406,11 @@ def save_template(path: str) -> str:
 
 
 def write_xlsx_records(path: str, records: list) -> bool:
-    """Write rows with the GDAL Excel driver. Return False when that driver cannot."""
-    if os.path.exists(path):
-        os.remove(path)
+    """Write rows with the GDAL Excel driver. Leave an existing file in place when the write fails."""
+    return publish_file(path, lambda temp: _write_xlsx_file(temp, records))
+
+
+def _write_xlsx_file(path: str, records: list) -> bool:
     layer = QgsVectorLayer("NoGeometry", "coordinates", "memory")
     if not layer.isValid():
         return False
@@ -401,13 +451,13 @@ def added_message(count: int, skipped: int) -> str:
     return message
 
 
-def add_converted_points(records: list) -> tuple:
+def add_converted_points(records: list, direction: str = "hkgrid") -> tuple:
     """Add complete rows to the Converted points layer. Return layer, ids, and skipped count."""
     located = []
     skipped = 0
     for record in records:
         try:
-            place = _locate_record(record)
+            place = _locate_record(record, direction)
         except (ValueError, QgsCsException):
             place = None
         if place is None:
@@ -514,16 +564,39 @@ def _new_points_layer(authid: str) -> QgsVectorLayer:
     return layer
 
 
-def _locate_record(record: dict):
-    latitude = _optional_number(record.get("latitude", ""))
-    longitude = _optional_number(record.get("longitude", ""))
-    northing = _optional_number(record.get("northing", ""))
-    easting = _optional_number(record.get("easting", ""))
-    if latitude is not None and longitude is not None:
+def _locate_record(record: dict, direction: str = "hkgrid"):
+    chosen = preferred_pair(direction, record)
+    if chosen == "wgsgeog":
+        latitude = _optional_number(record.get("latitude", ""))
+        longitude = _optional_number(record.get("longitude", ""))
+        if latitude is None or longitude is None:
+            return None
         return WGS84, QgsPointXY(longitude, latitude)
-    if northing is not None and easting is not None:
+    if chosen == "hkgrid":
+        northing = _optional_number(record.get("northing", ""))
+        easting = _optional_number(record.get("easting", ""))
+        if northing is None or easting is None:
+            return None
         return HK1980, QgsPointXY(easting, northing)
-    return None
+    if chosen is None:
+        return None
+    raise ValueError(f"Unknown direction {chosen!r}.")
+
+
+def fly_to_place(authid: str, point) -> bool:
+    """Move the map to one coordinate. Return False when the canvas cannot move."""
+    canvas = iface.mapCanvas() if iface is not None else None
+    if canvas is None:
+        return False
+    destination = canvas.mapSettings().destinationCrs()
+    try:
+        center = transform_xy(point, authid, destination)
+    except QgsCsException:
+        return False
+    pad = 0.01 if destination.isGeographic() else 400
+    canvas.setExtent(QgsRectangle(center.x() - pad, center.y() - pad, center.x() + pad, center.y() + pad))
+    canvas.refresh()
+    return True
 
 
 def _show_points(layer) -> None:
@@ -554,12 +627,39 @@ class DecimalDelegate(QStyledItemDelegate):
 
     def createEditor(self, parent, option, index):
         editor = QLineEdit(parent)
-        editor.setValidator(QRegularExpressionValidator(QRegularExpression(r"^[0-9]*\.?[0-9]*$"), editor))
+        editor.setValidator(QRegularExpressionValidator(QRegularExpression(COORDINATE_PATTERN), editor))
         return editor
 
 
-def _add_icon() -> QIcon:
-    return QIcon(os.path.join(os.path.dirname(__file__), "icon_add.png"))
+def _icon(filename: str) -> QIcon:
+    return QIcon(os.path.join(os.path.dirname(__file__), filename))
+
+
+def _fill_purpose(purpose: str) -> str:
+    if purpose == "load" or purpose == "replace":
+        return purpose
+    raise ValueError(f"Unknown table fill {purpose!r}.")
+
+
+def _status_style(kind: str) -> str:
+    if kind == "plain":
+        return ""
+    if kind == "ok":
+        return "background-color: #d9f2df; color: #14532d; padding: 6px;"
+    if kind == "warn":
+        return "background-color: #fdecc8; color: #7c4a03; padding: 6px;"
+    if kind == "error":
+        return "background-color: #f8d0d0; color: #7f1d1d; padding: 6px;"
+    raise ValueError(f"Unknown status {kind!r}.")
+
+
+def _action_item(icon: QIcon, tip: str) -> QTableWidgetItem:
+    item = QTableWidgetItem()
+    item.setIcon(icon)
+    item.setToolTip(tip)
+    item.setTextAlignment(_alignment("AlignCenter"))
+    item.setFlags(item.flags() & ~_item_flag("ItemIsEditable"))
+    return item
 
 
 def _alignment(name: str):
