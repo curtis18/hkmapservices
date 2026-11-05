@@ -23,6 +23,21 @@ def clamp_opacity(opacity: float) -> float:
     return max(0.0, min(1.0, float(opacity)))
 
 
+def group_identity(key: str) -> str:
+    """Name path of a group choice. Older keys also stored the legend position."""
+    text = str(key or "")
+    if not text.startswith("group:"):
+        return ""
+    parts = []
+    for piece in text[6:].split("/"):
+        head, separator, tail = piece.partition(":")
+        if separator and head.isdigit():
+            parts.append(tail)
+        else:
+            parts.append(piece)
+    return "/".join(parts)
+
+
 def normalize_opacity_side(side: str) -> str:
     """Return left, right, or both."""
     if side == "left" or side == "right" or side == "both":

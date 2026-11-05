@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
+from qgis.PyQt.QtCore import QTimer
 from qgis.core import QgsLayerTreeGroup, QgsLayerTreeLayer, QgsProject
 
-from .comparemath import clamp_opacity, clamp_position, normalize_direction, normalize_opacity_side
+from .comparemath import clamp_opacity, clamp_position, group_identity, normalize_direction, normalize_opacity_side
 
 
 class CompareSettings:
@@ -92,6 +93,7 @@ class CanvasOverride:
         self._wanted = []
         self._watching = False
         self._applying = False
+        self._queued = False
 
     def show(self, layers) -> None:
         """Draw only these layers on the main map until restore."""
@@ -120,6 +122,7 @@ class CanvasOverride:
     def restore(self) -> None:
         self._watch(False)
         self._wanted = []
+        self._queued = False
         canvas = self._canvas()
         saved = self._saved
         self._saved = None
@@ -133,6 +136,13 @@ class CanvasOverride:
         canvas.refresh()
 
     def _keep(self, *_args) -> None:
+        if self._applying or not self._wanted or self._queued:
+            return
+        self._queued = True
+        QTimer.singleShot(0, self._apply_queued)
+
+    def _apply_queued(self) -> None:
+        self._queued = False
         if self._applying or not self._wanted:
             return
         self._push()
@@ -244,8 +254,15 @@ class CompareView:
         return bool(self._layers(self._settings.left_key) and self._layers(self._settings.right_key))
 
     def _layers(self, key: str) -> list:
-        for side in collect_sides():
+        sides = collect_sides()
+        for side in sides:
             if side.key == key:
+                return side.layers()
+        identity = group_identity(key)
+        if not identity:
+            return []
+        for side in sides:
+            if group_identity(side.key) == identity:
                 return side.layers()
         return []
 
@@ -320,22 +337,26 @@ def _group_key(group, root) -> str:
     parts = []
     node = group
     while node is not None and node != root:
-        parent = node.parent()
-        index = _child_index(parent, node)
-        parts.append(f"{index}:{node.name()}")
-        node = parent
+        parts.append(_named_piece(node))
+        node = node.parent()
     parts.reverse()
     return "group:" + "/".join(parts)
 
 
-def _child_index(parent, node) -> int:
+def _named_piece(node) -> str:
+    """Group name, plus a number only when a sibling group has the same name."""
+    name = node.name()
+    parent = node.parent()
     if parent is None:
-        return 0
-    children = parent.children()
-    for index, child in enumerate(children):
-        if child is node:
-            return index
-    return 0
+        return name
+    matches = [
+        child
+        for child in parent.children()
+        if isinstance(child, QgsLayerTreeGroup) and child.name() == name
+    ]
+    if len(matches) < 2:
+        return name
+    return f"{name}#{matches.index(node) + 1}"
 
 
 def _disambiguate_labels(sides: list) -> None:

@@ -34,6 +34,7 @@ from qgis.core import (
 from qgis.utils import iface
 
 from .compat import enum_member
+from .status import apply_status, prepare_status
 from .config import HK1980, WEB_MERCATOR
 from .locations import parse_results, search_url
 
@@ -76,8 +77,7 @@ class LocationDialog(QDialog):
         layout.addLayout(query_row)
 
         self._status = QLabel("")
-        self._status.setWordWrap(True)
-        layout.addWidget(self._status)
+        layout.addWidget(prepare_status(self._status))
 
         self._table = QTableWidget(0, len(_COLUMNS))
         self._table.setHorizontalHeaderLabels(list(_COLUMNS))
@@ -112,17 +112,17 @@ class LocationDialog(QDialog):
         self._closed = False
         query = self._query.text().strip()
         if not query:
-            self._status.setText("Enter a place, address, or facility name.")
+            self._show_status("Enter a place, address, or facility name.", "warn")
             return
         try:
             url = search_url(query)
         except ValueError as exc:
-            self._status.setText(str(exc))
+            self._show_status(str(exc), "error")
             return
         self._abort_reply()
         self._results = []
         self._table.setRowCount(0)
-        self._status.setText("Searching...")
+        self._show_status("Searching...", "ok")
         self._search_button.setEnabled(False)
         request = QNetworkRequest(QUrl(url))
         request.setRawHeader(b"Accept", b"application/json")
@@ -145,12 +145,12 @@ class LocationDialog(QDialog):
         if self._closed:
             return
         if error != _no_error():
-            self._status.setText(message or "The location search failed.")
+            self._show_status(message or "The location search failed.", "error")
             return
         try:
             results = parse_results(json.loads(raw.decode("utf-8-sig")))
         except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
-            self._status.setText(str(exc) or "The location search could not be read.")
+            self._show_status(str(exc) or "The location search could not be read.", "error")
             return
         self._show_results(results)
 
@@ -160,7 +160,7 @@ class LocationDialog(QDialog):
         self._abort_reply()
         self._search_button.setEnabled(True)
         if not self._closed:
-            self._status.setText("The location search timed out.")
+            self._show_status("The location search timed out.", "error")
 
     def _abort_reply(self) -> None:
         self._timer.stop()
@@ -191,9 +191,12 @@ class LocationDialog(QDialog):
                 self._table.setItem(row, column, item)
         self._table.resizeRowsToContents()
         if results:
-            self._status.setText(f"{len(results)} locations.")
+            self._show_status(f"{len(results)} locations.", "ok")
         else:
-            self._status.setText("No locations found.")
+            self._show_status("No locations found.", "warn")
+
+    def _show_status(self, text: str, kind: str) -> None:
+        apply_status(self._status, text, kind)
 
     def _fly_to_row(self, row: int, _column: int) -> None:
         if 0 <= row < len(self._results):

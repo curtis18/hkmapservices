@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from qgis.PyQt.QtCore import Qt, QTimer
+from qgis.PyQt.QtCore import QEvent, QObject, Qt, QTimer
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QDockWidget, QMenu, QToolButton
 
@@ -19,6 +19,8 @@ from .aboutdialog import AboutDialog
 from .comparedock import CompareDock
 from .compat import enum_member, exec_dialog
 from .convertdialog import ConvertDialog
+from .downloaddialog import DownloadDialog
+from .filedialog import FileDialog
 from .cursordock import CursorDock, _HOLD_SHORTCUT, _REPLACED_HOLD_SHORTCUTS
 from .dialog import BasemapDialog, DatasetDialog
 from .locationdialog import LocationDialog
@@ -29,7 +31,9 @@ from .layers import (
     shutdown_background_services,
 )
 from .splitview import SplitView
+from .svgdialog import SvgDialog
 from .swipeview import SwipeView
+from .vectorproxy import loopback_proxy_warning
 
 
 class HkMapServices:
@@ -41,6 +45,9 @@ class HkMapServices:
         self.dataset_action = None
         self.location_action = None
         self.convert_action = None
+        self.file_action = None
+        self.download_action = None
+        self.svg_action = None
         self.cursor_action = None
         self.swipe_action = None
         self.about_action = None
@@ -50,12 +57,16 @@ class HkMapServices:
         self.toolbar_action = None
         self.dialog = None
         self.convert_dialog = None
+        self.file_dialog = None
+        self.download_dialog = None
+        self.svg_dialog = None
         self.location_dialog = None
         self._alive = True
         self.cursor_dock = None
         self.swipe_view = None
         self.split_view = None
         self.compare_dock = None
+        self._close_filter = None
 
     def initGui(self) -> None:
         icon = _load_icon("icon.png")
@@ -75,6 +86,15 @@ class HkMapServices:
         self.convert_action = QAction(_load_icon("icon_convert.png"), "Convert Coordinates", window)
         self.convert_action.setObjectName("hkmapservicesConvert")
         self.convert_action.triggered.connect(self.run_convert)
+        self.file_action = QAction(_load_icon("icon_files.png"), "Convert FGDB / GPKG Files", window)
+        self.file_action.setObjectName("hkmapservicesFiles")
+        self.file_action.triggered.connect(self.run_files)
+        self.download_action = QAction(_load_icon("icon_download.png"), "Download Files", window)
+        self.download_action.setObjectName("hkmapservicesDownload")
+        self.download_action.triggered.connect(self.run_download)
+        self.svg_action = QAction(_load_icon("icon_svg.png"), "Export SVG", window)
+        self.svg_action.setObjectName("hkmapservicesSvg")
+        self.svg_action.triggered.connect(self.run_svg)
         self.cursor_action = QAction("Cursor Coordinates", window)
         self.cursor_action.setObjectName("hkmapservicesCursor")
         self.cursor_action.setCheckable(True)
@@ -110,9 +130,22 @@ class HkMapServices:
         project.readProject.connect(self._on_project_read)
         project.cleared.connect(self._on_project_cleared)
         self._repair_grids()
+        if window is not None:
+            self._close_filter = _WindowClose(self)
+            window.installEventFilter(self._close_filter)
+
+    def prepare_for_close(self) -> None:
+        """Put the map canvas back and stop tile reads before QGIS closes the window."""
+        if self.compare_dock is not None:
+            self.compare_dock.mark_stopped()
+        shutdown_background_services()
 
     def unload(self) -> None:
         self._alive = False
+        window = self.iface.mainWindow()
+        if window is not None and self._close_filter is not None:
+            window.removeEventFilter(self._close_filter)
+        self._close_filter = None
         project = QgsProject.instance()
         try:
             project.readProject.disconnect(self._on_project_read)
@@ -123,8 +156,14 @@ class HkMapServices:
         except TypeError:
             pass
         self._close_dialog(self.convert_dialog)
+        self._close_dialog(self.file_dialog)
+        self._close_dialog(self.download_dialog)
+        self._close_dialog(self.svg_dialog)
         self._close_dialog(self.location_dialog)
         self.convert_dialog = None
+        self.file_dialog = None
+        self.download_dialog = None
+        self.svg_dialog = None
         self.location_dialog = None
         for action in self._ordered_actions():
             if action is not None:
@@ -133,6 +172,9 @@ class HkMapServices:
         self.dataset_action = None
         self.location_action = None
         self.convert_action = None
+        self.file_action = None
+        self.download_action = None
+        self.svg_action = None
         self.cursor_action = None
         self.swipe_action = None
         self._remove_about_from_web_menu()
@@ -182,6 +224,21 @@ class HkMapServices:
         if self.convert_dialog is None:
             self.convert_dialog = ConvertDialog(self.iface.mainWindow())
         self._show_dialog(self.convert_dialog)
+
+    def run_files(self) -> None:
+        if self.file_dialog is None:
+            self.file_dialog = FileDialog(self.iface.mainWindow())
+        self._show_dialog(self.file_dialog)
+
+    def run_download(self) -> None:
+        if self.download_dialog is None:
+            self.download_dialog = DownloadDialog(self.iface, self.iface.mainWindow())
+        self._show_dialog(self.download_dialog)
+
+    def run_svg(self) -> None:
+        if self.svg_dialog is None:
+            self.svg_dialog = SvgDialog(self.iface, self.iface.mainWindow())
+        self._show_dialog(self.svg_dialog)
 
     def run_location(self) -> None:
         if self.location_dialog is None:
@@ -247,8 +304,11 @@ class HkMapServices:
             self.basemap_action,
             self.dataset_action,
             self.location_action,
+            self.download_action,
             self.swipe_action,
             self.convert_action,
+            self.file_action,
+            self.svg_action,
             self.cursor_action,
         )
 
@@ -294,6 +354,12 @@ class HkMapServices:
             repair_grid_sources()
         except OSError as exc:
             self._warn(f"The vector tile proxy did not start. {exc}")
+            return
+        layers = QgsProject.instance().mapLayers().values()
+        if any(layer.customProperty("hkmapservices/vector_path") for layer in layers):
+            warning = loopback_proxy_warning()
+            if warning:
+                self._warn(warning)
 
     def _warn(self, text: str) -> None:
         finder = getattr(self.iface, "messageBar", None)
@@ -311,8 +377,12 @@ class HkMapServices:
         dialog.activateWindow()
 
     def _close_dialog(self, dialog) -> None:
-        if dialog is not None:
-            dialog.close()
+        if dialog is None:
+            return
+        shutdown = getattr(dialog, "shutdown", None)
+        if callable(shutdown):
+            shutdown()
+        dialog.close()
 
 
 def _accepted(dialog) -> bool:
@@ -365,6 +435,25 @@ def _shortcut_context(name: str):
     if hasattr(Qt, name):
         return getattr(Qt, name)
     return getattr(Qt.ShortcutContext, name)
+
+
+class _WindowClose(QObject):
+    """Restore the map canvas before QGIS handles the window close."""
+
+    def __init__(self, plugin):
+        super().__init__()
+        self._plugin = plugin
+
+    def eventFilter(self, _watched, event):
+        if event.type() == _close_event():
+            self._plugin.prepare_for_close()
+        return False
+
+
+def _close_event():
+    if hasattr(QEvent, "Close"):
+        return QEvent.Close
+    return QEvent.Type.Close
 
 
 def _load_icon(filename: str) -> QIcon:

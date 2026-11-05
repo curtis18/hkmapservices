@@ -328,6 +328,7 @@ def hk80_raster_xml(url: str) -> str:
     safe_url = escape(gdal_url, quote=True)
     return (
         "<GDAL_WMS>\n"
+        "  <Timeout>30</Timeout>\n"
         "  <Service name=\"TMS\">\n"
         f"    <ServerUrl>{safe_url}</ServerUrl>\n"
         "  </Service>\n"

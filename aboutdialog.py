@@ -84,7 +84,10 @@ def _info_label() -> QLabel:
     label = QLabel(
         "Adds Lands Department imagery, topographic, and vector basemaps, with place-name labels. "
         "Adds selected CSDI datasets. Search a place, convert HK1980 Grid and WGS84 coordinates, "
-        "and read both under the map cursor. Compare layers or groups with Swipe and Split.<br><br>"
+        "and read both under the map cursor. Convert a File Geodatabase or GeoPackage, "
+        "download files from a URL column with resumable partial files, unzip downloaded "
+        "archives in place, and export the current map to SVG. "
+        "Compare layers or groups with Swipe and Split.<br><br>"
         "<b>Developer:</b> Curtis Yung<br>"
         f'<b>Issue Tracker:</b> <a href="{_TRACKER_URL}">GitHub</a><br>'
         f'<b>Source Code:</b> <a href="{_SOURCE_URL}">GitHub</a>'

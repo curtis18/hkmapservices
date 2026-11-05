@@ -57,6 +57,12 @@ class CompareMathTests(unittest.TestCase):
             (comparemath.HANDLE_GREEN, 3),
         ))
 
+    def test_group_identity_ignores_legend_position(self) -> None:
+        moved = "group:1:Hong Kong — WGS84 — Vector Map"
+        stable = "group:Hong Kong — WGS84 — Vector Map"
+        self.assertEqual(comparemath.group_identity(moved), comparemath.group_identity(stable))
+        self.assertEqual(comparemath.group_identity("layer:abc"), "")
+
     def test_unknown_direction(self) -> None:
         with self.assertRaises(ValueError):
             comparemath.normalize_opacity_side("middle")

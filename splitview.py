@@ -28,11 +28,16 @@ class SplitView(CompareView):
         self._pan = None
         self._parent = None
         self._stacked = None
+        self._canvas_index = -1
         self._mode = ""
         self._syncing = False
         self._sizing = False
         self._main_hooks = False
+        self._pending_sync = ""
         self._hooks = _SplitHooks(self)
+        self._sync_timer = QTimer(self._hooks)
+        self._sync_timer.setSingleShot(True)
+        self._sync_timer.timeout.connect(self._run_sync)
         self._main_policy = None
         self._main_minimum = None
         self._main_maximum = None
@@ -60,7 +65,20 @@ class SplitView(CompareView):
         QTimer.singleShot(0, self._keep_splitter_current)
         QTimer.singleShot(0, self._apply_equal_sizes)
 
+    def reload(self) -> bool:
+        if not self._active:
+            return True
+        if self._splitter is None:
+            return super().reload()
+        if not self._ready():
+            self.stop()
+            return False
+        self._apply_layers()
+        return True
+
     def _hide(self) -> None:
+        self._sync_timer.stop()
+        self._pending_sync = ""
         self._clear_pane_effects()
         self._disconnect_maps()
         self._canvas_override.restore()
@@ -128,16 +146,17 @@ class SplitView(CompareView):
         self._splitter.setStretchFactor(0, 1)
         self._splitter.setStretchFactor(1, 1)
         if stacked is not None:
-            stacked.removeWidget(main)
+            index = stacked.indexOf(main)
+            self._canvas_index = index if index >= 0 else 0
             self._splitter.addWidget(main)
             self._splitter.addWidget(self._second)
-            stacked.addWidget(self._splitter)
+            stacked.insertWidget(self._canvas_index, self._splitter)
             self._stacked = stacked
             self._mode = "stack"
             if not self._stack_hooked:
                 stacked.currentChanged.connect(self._on_stack_changed)
                 self._stack_hooked = True
-            stacked.setCurrentWidget(self._splitter)
+            stacked.setCurrentIndex(self._canvas_index)
         else:
             self._splitter.addWidget(main)
             self._splitter.addWidget(self._second)
@@ -198,16 +217,19 @@ class SplitView(CompareView):
             self._stack_hooked = False
         splitter.hide()
         self._restore_main_constraints()
-        if splitter.indexOf(main) >= 0:
-            main.setParent(None)
+        restored_index = -1
         if self._mode == "stack" and stacked is not None:
+            restored_index = self._canvas_index if self._canvas_index >= 0 else stacked.indexOf(splitter)
+            if restored_index < 0:
+                restored_index = 0
+            stacked.insertWidget(restored_index, main)
+            stacked.setCurrentIndex(restored_index)
             stacked.removeWidget(splitter)
-            stacked.addWidget(main)
-            stacked.setCurrentWidget(main)
             main.show()
         elif self._mode == "layout" and self._parent is not None and self._parent.layout() is not None:
-            self._parent.layout().removeWidget(splitter)
             self._parent.layout().addWidget(main)
+            self._parent.layout().removeWidget(splitter)
+            main.show()
         if second is not None:
             second.setParent(None)
             second.deleteLater()
@@ -268,9 +290,11 @@ class SplitView(CompareView):
         self._apply_equal_sizes()
 
     def _apply_layers(self) -> None:
-        self._canvas_override.show(self._layers(self._settings.left_key))
+        left = self._layers(self._settings.left_key)
+        right = self._layers(self._settings.right_key)
+        self._canvas_override.show(left)
         if self._second is not None:
-            self._second.setLayers(self._layers(self._settings.right_key))
+            self._second.setLayers(right)
             self._second.refresh()
 
     def _connect_maps(self) -> None:
@@ -307,28 +331,44 @@ class SplitView(CompareView):
         self._main_hooks = False
 
     def _from_main(self, *_args) -> None:
-        if self._syncing or self._second is None or self.iface is None:
-            return
-        self._syncing = True
-        try:
-            self._copy_onto(self._second, self.iface.mapCanvas())
-        finally:
-            self._syncing = False
+        self._queue_sync("main")
 
     def _from_second(self, *_args) -> None:
-        if self._syncing or self._second is None or self.iface is None:
+        self._queue_sync("second")
+
+    def _queue_sync(self, source: str) -> None:
+        if source != "main" and source != "second":
+            raise ValueError(f"Unknown sync source {source!r}.")
+        if not self._active or self._second is None or self.iface is None:
             return
+        self._pending_sync = source
+        if not self._sync_timer.isActive():
+            self._sync_timer.start(0)
+
+    def _run_sync(self) -> None:
+        source = self._pending_sync
+        self._pending_sync = ""
+        if self._syncing or not self._active or self._second is None or self.iface is None:
+            return
+        if source == "main":
+            target = self._second
+            origin = self.iface.mapCanvas()
+        elif source == "second":
+            target = self.iface.mapCanvas()
+            origin = self._second
+        elif source == "":
+            return
+        else:
+            raise ValueError(f"Unknown sync source {source!r}.")
         self._syncing = True
         try:
-            self._copy_onto(self.iface.mapCanvas(), self._second)
+            self._copy_onto(target, origin)
         finally:
             self._syncing = False
 
     def _copy_onto(self, target, source) -> None:
         if target is None or source is None or _views_match(source, target):
             return
-        _refresh_canvas_size(source)
-        _refresh_canvas_size(target)
         target.blockSignals(True)
         try:
             target.setDestinationCrs(source.mapSettings().destinationCrs())
@@ -337,6 +377,11 @@ class SplitView(CompareView):
             target.refresh()
         finally:
             target.blockSignals(False)
+
+
+def _canvas_drawing(canvas) -> bool:
+    checker = getattr(canvas, "isDrawing", None) if canvas is not None else None
+    return bool(callable(checker) and checker())
 
 
 def _views_match(source, target) -> bool:
@@ -381,8 +426,11 @@ class _SplitHooks(QObject):
 
 
 def _refresh_canvas_size(canvas) -> None:
-    """Make the map use its current pane size before comparing extents."""
+    """Give a pane its current widget size after the splitter has moved."""
     if canvas is None:
+        return
+    drawing = _canvas_drawing(canvas)
+    if drawing:
         return
     size = canvas.size()
     if size.width() < 2 or size.height() < 2:

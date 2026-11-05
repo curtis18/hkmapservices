@@ -30,6 +30,7 @@ class SwipeView(CompareView):
         self._overlay = None
         self._filter = _DividerFilter(self)
         self._jobs = {}
+        self._retiring = []
         self._generation = 0
         self._canvas_override = CanvasOverride(iface)
         self._hooked_canvas = None
@@ -115,6 +116,10 @@ class SwipeView(CompareView):
         job.start()
 
     def _job_finished(self, side: str, token: int, job) -> None:
+        try:
+            self._retiring.remove(job)
+        except ValueError:
+            pass
         current = self._jobs.get(side)
         if token != self._generation or current is None or current[1] is not job:
             job.deleteLater()
@@ -133,8 +138,8 @@ class SwipeView(CompareView):
         if current is None:
             return
         _token, job = current
+        self._retiring.append(job)
         job.cancel()
-        job.deleteLater()
 
     def _ensure_overlay(self, canvas) -> None:
         if self._overlay is None or self._hooked_canvas is not canvas:

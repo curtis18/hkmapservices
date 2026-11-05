@@ -19,6 +19,7 @@ from qgis.PyQt.QtWidgets import (
 from qgis.core import QgsProject
 
 from .compare import CompareSettings, collect_sides
+from .comparemath import group_identity
 
 
 class CompareDock(QDockWidget):
@@ -380,8 +381,14 @@ class CompareDock(QDockWidget):
         for side in self._sides:
             combo.addItem(side.label, side.key)
         index = combo.findData(key) if key else -1
-        if index >= 0:
-            combo.setCurrentIndex(index)
+        if index < 0 and key:
+            identity = group_identity(str(key))
+            if identity:
+                for row in range(combo.count()):
+                    if group_identity(str(combo.itemData(row) or "")) == identity:
+                        index = row
+                        break
+        combo.setCurrentIndex(index)
         combo.blockSignals(False)
 
     def _select(self, left_key: str, right_key: str) -> None:

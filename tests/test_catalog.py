@@ -177,6 +177,7 @@ class CatalogTests(unittest.TestCase):
         self.assertIn("<TileCountX>1</TileCountX>", xml)
         self.assertIn("<TileLevel>20</TileLevel>", xml)
         self.assertIn("<MaxConnections>4</MaxConnections>", xml)
+        self.assertIn("<Timeout>30</Timeout>", xml)
         self.assertIn("<ZeroBlockHttpCodes>204,404</ZeroBlockHttpCodes>", xml)
         self.assertIn(url.replace("{", "${"), xml)
         lower_x = catalog.HK80_ORIGIN_X + catalog.HK80_LEVEL0_SPAN

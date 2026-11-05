@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import math
 import os
 
 from qgis.PyQt.QtCore import QRegularExpression, QSize, Qt, QTimer, QVariant
 from qgis.PyQt.QtGui import QIcon, QRegularExpressionValidator
 from qgis.PyQt.QtWidgets import (
+    QApplication,
     QComboBox,
     QDialog,
     QFileDialog,
@@ -33,11 +35,13 @@ from qgis.core import (
     QgsVectorFileWriter,
     QgsVectorLayer,
 )
+from qgis.gui import QgsMapCanvas
 from qgis.utils import iface
 
 from .compat import enum_member
 from .config import HK1980, WGS84
 from .coords import convert_values, transform_xy
+from .status import apply_status, prepare_status
 from .transform import (
     COORDINATE_PATTERN,
     CSV_HEADERS,
@@ -141,8 +145,7 @@ class ConvertDialog(QDialog):
         layout.addLayout(action_buttons)
         self._busy_buttons = (add_row, remove_row, load, template, transform, add_all, save)
         self._status = QLabel("")
-        self._status.setWordWrap(True)
-        layout.addWidget(self._status)
+        layout.addWidget(prepare_status(self._status))
 
     def closeEvent(self, event) -> None:
         self._finish_fill(True)
@@ -173,7 +176,7 @@ class ConvertDialog(QDialog):
         if trim and incomplete and self._table.rowCount() == 0:
             self._insert_empty_row(False)
         self._set_busy(False)
-        if self._status.text() == "Loading...":
+        if self._status.text() == "Processing...":
             self._show_status("", "plain")
 
     def _add_row(self) -> None:
@@ -205,6 +208,8 @@ class ConvertDialog(QDialog):
         )
         if not path:
             return
+        self._show_status("Processing...", "ok")
+        QApplication.processEvents()
         try:
             records, truncated = load_coordinate_file(path)
         except ValueError as exc:
@@ -243,7 +248,11 @@ class ConvertDialog(QDialog):
         records = self._records()
         used = 0
         failed = 0
-        for record in records:
+        self._show_status("Processing...", "ok")
+        QApplication.processEvents()
+        for index, record in enumerate(records):
+            if index % 200 == 0:
+                QApplication.processEvents()
             if not _has_direction_input(direction, record):
                 continue
             used += 1
@@ -343,7 +352,7 @@ class ConvertDialog(QDialog):
         self._table.blockSignals(True)
         self._table.setRowCount(len(self._pending_records))
         if len(self._pending_records) > _FILL_BATCH:
-            self._show_status("Loading...", "plain")
+            self._show_status("Processing...", "ok")
         self._fill_batch(token)
 
     def _fill_batch(self, token: int) -> None:
@@ -372,7 +381,7 @@ class ConvertDialog(QDialog):
             text, kind = notice
             self._show_status(text, kind)
             return
-        if self._status.text() == "Loading...":
+        if self._status.text() == "Processing...":
             self._show_status("", "plain")
 
     def _reject_coordinate_text(self, item) -> None:
@@ -417,8 +426,7 @@ class ConvertDialog(QDialog):
         self._show_status(f"Loaded {self._load_count} {noun}.", "ok")
 
     def _show_status(self, text: str, kind: str) -> None:
-        self._status.setText(text)
-        self._status.setStyleSheet("" if text == "" else _status_style(kind))
+        apply_status(self._status, text, kind)
 
 
 def load_coordinate_file(path: str) -> tuple:
@@ -512,35 +520,44 @@ def add_converted_points(records: list, direction: str = "hkgrid") -> tuple:
         layer = _new_points_layer(located[0][1][0])
 
     added = []
-    layer.startEditing()
-    for record, (authid, point) in located:
-        try:
-            if authid != layer.crs().authid():
-                point = transform_xy(point, authid, layer.crs())
-        except QgsCsException:
-            skipped += 1
-            continue
-        feature = QgsFeature(layer.fields())
-        feature.setGeometry(QgsGeometry.fromPointXY(point))
-        feature.setAttributes(
-            [
-                record.get("point_id", ""),
-                _stored_number(record.get("northing", "")),
-                _stored_number(record.get("easting", "")),
-                _stored_number(record.get("latitude", "")),
-                _stored_number(record.get("longitude", "")),
-            ]
-        )
-        if layer.addFeature(feature):
-            added.append(feature.id())
-        else:
-            skipped += 1
-    if not layer.commitChanges():
-        layer.rollBack()
+    outcome = "ok"
+    paused = _pause_canvases()
+    try:
+        layer.startEditing()
+        for record, (authid, point) in located:
+            try:
+                if authid != layer.crs().authid():
+                    point = transform_xy(point, authid, layer.crs())
+            except QgsCsException:
+                skipped += 1
+                continue
+            feature = QgsFeature(layer.fields())
+            feature.setGeometry(QgsGeometry.fromPointXY(point))
+            feature.setAttributes(
+                [
+                    record.get("point_id", ""),
+                    _stored_number(record.get("northing", "")),
+                    _stored_number(record.get("easting", "")),
+                    _stored_number(record.get("latitude", "")),
+                    _stored_number(record.get("longitude", "")),
+                ]
+            )
+            if layer.addFeature(feature):
+                added.append(feature.id())
+            else:
+                skipped += 1
+        if not layer.commitChanges():
+            layer.rollBack()
+            outcome = "fail"
+        elif created and added:
+            QgsProject.instance().addMapLayer(layer)
+        elif created:
+            outcome = "empty"
+    finally:
+        _resume_canvases(paused)
+    if outcome == "fail":
         return None, [], skipped + len(located)
-    if created and added:
-        QgsProject.instance().addMapLayer(layer)
-    elif created:
+    if outcome == "empty":
         return None, [], skipped
     if added:
         _show_points(layer)
@@ -575,6 +592,53 @@ def _ogr_uri(path: str) -> str:
     if suffix in (".xlsx", ".xls"):
         return path + "|option:HEADERS=FORCE"
     return path
+
+
+def _map_canvases() -> list:
+    if iface is None:
+        return []
+    window = None
+    finder = getattr(iface, "mainWindow", None)
+    if callable(finder):
+        try:
+            window = finder()
+        except RuntimeError:
+            window = None
+    if window is not None:
+        canvases = list(window.findChildren(QgsMapCanvas))
+        if canvases:
+            return canvases
+    canvas = iface.mapCanvas() if hasattr(iface, "mapCanvas") else None
+    if canvas is None:
+        return []
+    return [canvas]
+
+
+def _pause_canvases() -> list:
+    """Stop every map draw before the point layer is edited."""
+    canvases = _map_canvases()
+    for canvas in canvases:
+        stopper = getattr(canvas, "stopRendering", None)
+        if callable(stopper):
+            stopper()
+        freezer = getattr(canvas, "freeze", None)
+        if callable(freezer):
+            freezer(True)
+    return canvases
+
+
+def _resume_canvases(canvases) -> None:
+    for canvas in canvases:
+        freezer = getattr(canvas, "freeze", None)
+        if callable(freezer):
+            freezer(False)
+
+
+def _extent_is_usable(extent) -> bool:
+    if extent is None or extent.isNull() or extent.isEmpty():
+        return False
+    values = (extent.xMinimum(), extent.yMinimum(), extent.xMaximum(), extent.yMaximum())
+    return all(math.isfinite(value) for value in values)
 
 
 def _converted_layer():
@@ -662,6 +726,9 @@ def _show_points(layer) -> None:
         output = QgsRectangle(center.x() - pad, center.y() - pad, center.x() + pad, center.y() + pad)
     else:
         output.scale(1.3)
+    if not _extent_is_usable(output):
+        canvas.refresh()
+        return
     canvas.setExtent(output)
     canvas.refresh()
 
@@ -683,18 +750,6 @@ def _fill_purpose(purpose: str) -> str:
     if purpose == "load" or purpose == "replace":
         return purpose
     raise ValueError(f"Unknown table fill {purpose!r}.")
-
-
-def _status_style(kind: str) -> str:
-    if kind == "plain":
-        return ""
-    if kind == "ok":
-        return "background-color: #d9f2df; color: #14532d; padding: 6px;"
-    if kind == "warn":
-        return "background-color: #fdecc8; color: #7c4a03; padding: 6px;"
-    if kind == "error":
-        return "background-color: #f8d0d0; color: #7f1d1d; padding: 6px;"
-    raise ValueError(f"Unknown status {kind!r}.")
 
 
 def _action_item(icon: QIcon, tip: str) -> QTableWidgetItem:

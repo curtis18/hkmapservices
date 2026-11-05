@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import json
 import os
+import time
+from contextlib import contextmanager
 
 from qgis.core import (
     Qgis,
     QgsApplication,
+    QgsBlockingNetworkRequest,
     QgsCoordinateReferenceSystem,
     QgsCoordinateTransform,
     QgsCsException,
@@ -14,6 +18,7 @@ from qgis.core import (
     QgsFillSymbol,
     QgsLineSymbol,
     QgsMarkerSymbol,
+    QgsNetworkAccessManager,
     QgsPalLayerSettings,
     QgsProject,
     QgsRasterLayer,
@@ -25,8 +30,12 @@ from qgis.core import (
     QgsVectorLayerSimpleLabeling,
     QgsVectorTileLayer,
 )
-from qgis.PyQt.QtGui import QColor, QFont, QFontDatabase
+from qgis.PyQt.QtCore import QEventLoop, Qt, QUrl
+from qgis.PyQt.QtGui import QColor, QCursor, QFont, QFontDatabase
+from qgis.PyQt.QtNetwork import QNetworkReply, QNetworkRequest
+from qgis.PyQt.QtWidgets import QApplication
 
+from .compat import enum_member
 from .config import HK1980, WEB_MERCATOR
 from .catalog import (
     CSDI_CREDIT,
@@ -50,7 +59,11 @@ from .catalog import (
     vector_zoom,
     write_grid_files,
 )
-from .vectorproxy import proxy_base_url, stop_proxy
+from .vectorproxy import loopback_proxy_warning, proxy_base_url, stop_proxy
+
+
+_NETWORK_TIMEOUT_MS = 30000
+_NETWORK_TIMEOUT_SECONDS = _NETWORK_TIMEOUT_MS // 1000
 
 
 def grid_directory() -> str:
@@ -90,6 +103,162 @@ def shutdown_background_services() -> None:
     stop_proxy()
 
 
+def _with_busy(iface, text: str, function, *args):
+    """Run one blocking layer call with a visible wait cursor and message."""
+    with _busy(iface, text):
+        return function(*args)
+
+
+@contextmanager
+def _busy(iface, text: str):
+    app = QApplication.instance()
+    bar = _message_bar(iface)
+    item = None
+    if app is not None:
+        app.setOverrideCursor(_wait_cursor())
+    if bar is not None:
+        try:
+            item = bar.pushInfo("Hong Kong Map Services", text)
+        except (AttributeError, TypeError):
+            item = None
+    if app is not None:
+        app.processEvents(_process_events_flag())
+    try:
+        yield
+    finally:
+        if bar is not None and item is not None:
+            try:
+                bar.popWidget(item)
+            except (AttributeError, TypeError):
+                pass
+        if app is not None:
+            app.restoreOverrideCursor()
+
+
+def _wait_cursor():
+    return QCursor(enum_member(Qt, "CursorShape", "WaitCursor"))
+
+
+def _process_events_flag():
+    return enum_member(QEventLoop, "ProcessEventsFlag", "ExcludeUserInputEvents")
+
+
+def _message_bar(iface):
+    if iface is None:
+        return None
+    finder = getattr(iface, "messageBar", None)
+    if not callable(finder):
+        return None
+    try:
+        return finder()
+    except RuntimeError:
+        return None
+
+
+def _remaining_ms(deadline: float) -> int:
+    return max(0, int((deadline - time.monotonic()) * 1000))
+
+
+@contextmanager
+def _bounded_network(timeout_ms: int = _NETWORK_TIMEOUT_MS):
+    """Temporarily cap QGIS network requests, then restore the user's setting."""
+    manager = QgsNetworkAccessManager.instance()
+    previous = manager.timeout()
+    target = max(1000, min(int(timeout_ms), _NETWORK_TIMEOUT_MS))
+    if previous and previous < target:
+        target = previous
+    changed = previous != target
+    if changed:
+        manager.setTimeout(target)
+    try:
+        yield
+    finally:
+        if changed:
+            manager.setTimeout(previous)
+
+
+def _preflight(url: str, label: str, timeout_ms: int = _NETWORK_TIMEOUT_MS) -> str | None:
+    """Check one service before constructing a layer that would block QGIS."""
+    if timeout_ms <= 0:
+        return _timeout_message(label, _NETWORK_TIMEOUT_MS)
+    timeout_ms = max(1000, min(int(timeout_ms), _NETWORK_TIMEOUT_MS))
+    current = QgsNetworkAccessManager.instance().timeout()
+    if current and current < timeout_ms:
+        timeout_ms = current
+    request = QNetworkRequest(QUrl(url))
+    request.setRawHeader(b"Accept", b"application/json")
+    request.setRawHeader(b"User-Agent", b"hkmapservices")
+    if hasattr(request, "setTransferTimeout"):
+        request.setTransferTimeout(timeout_ms)
+    started = time.monotonic()
+    network = QgsBlockingNetworkRequest()
+    code = network.get(request, True)
+    elapsed = (time.monotonic() - started) * 1000
+    reply = network.reply()
+    no_error = enum_member(QNetworkReply, "NetworkError", "NoError")
+    error = reply.error() if reply is not None else no_error
+    if code == QgsBlockingNetworkRequest.TimeoutError or (
+        elapsed >= timeout_ms - 250 and error != no_error
+    ):
+        return _timeout_message(label, timeout_ms)
+    if code != QgsBlockingNetworkRequest.NoError or error != no_error:
+        detail = network.errorMessage()
+        if not detail and reply is not None:
+            detail = reply.errorString()
+        detail = detail or "The network request failed."
+        return f"{label} could not be reached. {detail}"
+    status = None
+    if reply is not None:
+        status = reply.attribute(
+            enum_member(QNetworkRequest, "Attribute", "HttpStatusCodeAttribute")
+        )
+    try:
+        status = int(status) if status is not None else 0
+    except (TypeError, ValueError):
+        status = 0
+    if status >= 400:
+        return f"{label} returned HTTP {status}."
+    payload = _json_payload(reply)
+    if isinstance(payload, dict):
+        failure = payload.get("error")
+        if isinstance(failure, dict):
+            message = str(failure.get("message") or "").strip()
+            if message:
+                return f"{label} returned an error. {message}"
+        elif failure:
+            return f"{label} returned an error. {failure}"
+    return None
+
+
+def _timeout_message(label: str, timeout_ms: int) -> str:
+    seconds = timeout_ms // 1000 if timeout_ms % 1000 == 0 else timeout_ms / 1000
+    return (
+        f"{label} timed out after {seconds} seconds. "
+        "Check your internet connection or QGIS proxy settings."
+    )
+
+
+def _json_payload(reply):
+    if reply is None:
+        return None
+    content = bytes(reply.content())
+    if not content:
+        return None
+    try:
+        return json.loads(content.decode("utf-8-sig"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+
+
+def _warn_loopback(iface, layers) -> None:
+    if not any(layer.customProperty("hkmapservices/vector_path") for layer in layers):
+        return
+    warning = loopback_proxy_warning()
+    bar = _message_bar(iface)
+    if warning and bar is not None:
+        bar.pushWarning("Hong Kong Map Services", warning, 0)
+
+
 def add_basemap(iface, request: BasemapRequest) -> bool:
     """Add one basemap group, with optional place-name labels and no datasets."""
     project = QgsProject.instance()
@@ -97,7 +266,12 @@ def add_basemap(iface, request: BasemapRequest) -> bool:
     errors = []
     added = []
     try:
-        basemap = _make_basemap(request)
+        basemap = _with_busy(
+            iface,
+            "Adding the Hong Kong basemap. Waiting up to 30 seconds for the service.",
+            _make_basemap,
+            request,
+        )
     except OSError as exc:
         _report(iface, [], [str(exc)], "")
         return False
@@ -108,7 +282,12 @@ def add_basemap(iface, request: BasemapRequest) -> bool:
 
     if request.label_language:
         try:
-            labels = _make_labels(request)
+            labels = _with_busy(
+                iface,
+                "Adding the Hong Kong basemap labels. Waiting up to 30 seconds for the service.",
+                _make_labels,
+                request,
+            )
         except OSError as exc:
             errors.append(str(exc))
             labels = None
@@ -127,6 +306,7 @@ def add_basemap(iface, request: BasemapRequest) -> bool:
         project.setCrs(QgsCoordinateReferenceSystem(project_crs_authid(request.crs)))
     _zoom_to_hong_kong(iface)
     _report(iface, added, errors, group.name())
+    _warn_loopback(iface, added)
     return True
 
 
@@ -141,9 +321,21 @@ def add_datasets(iface, request) -> bool:
 
     errors = []
     added = []
+    deadline = time.monotonic() + _NETWORK_TIMEOUT_SECONDS
     for dataset in chosen:
+        remaining = _remaining_ms(deadline)
+        if remaining <= 0:
+            errors.append("The 30-second limit was reached. The remaining datasets were not added.")
+            break
         try:
-            layer = _make_dataset(dataset, request.name_language)
+            layer = _with_busy(
+                iface,
+                "Adding the Hong Kong datasets. Waiting up to 30 seconds for the services.",
+                _make_dataset,
+                dataset,
+                request.name_language,
+                remaining,
+            )
         except OSError as exc:
             errors.append(str(exc))
             continue
@@ -259,15 +451,32 @@ def _raster_layer(kind: str, crs_key: str, language: str | None, title: str, gri
 def _vector_tile_layer(kind: str, crs_key: str, language: str | None, title: str):
     service_path = vector_service_path(kind, crs_key, language)
     style_url = vector_style_url(kind, crs_key, language)
-    layer = _open_vector_tile(service_path, style_url, title)
-    if not layer.isValid():
-        layer = _open_vector_tile(service_path, style_url, title)
+    base_url = proxy_base_url()
+    deadline = time.monotonic() + _NETWORK_TIMEOUT_SECONDS
+    with _bounded_network():
+        problem = _preflight(
+            base_url + service_path,
+            "The vector tile service",
+            _remaining_ms(deadline),
+        )
+        if problem is None:
+            problem = _preflight(
+                style_url,
+                "The vector tile style",
+                _remaining_ms(deadline),
+            )
+        if problem:
+            warning = loopback_proxy_warning()
+            if warning:
+                problem = f"{problem} {warning}"
+            raise OSError(problem)
+        layer = _open_vector_tile(base_url, service_path, style_url, title)
     return layer
 
 
-def _open_vector_tile(service_path: str, style_url: str, title: str):
+def _open_vector_tile(base_url: str, service_path: str, style_url: str, title: str):
     layer = QgsVectorTileLayer(
-        _vector_tile_uri(proxy_base_url() + service_path, style_url),
+        _vector_tile_uri(base_url + service_path, style_url),
         title,
     )
     layer.setCustomProperty("hkmapservices/vector_path", service_path)
@@ -289,11 +498,16 @@ def _vector_tile_uri(service_url: str, style_url: str) -> str:
     return _as_text(uri.encodedUri())
 
 
-def _make_dataset(dataset, language: str):
-    layer = _open_dataset(dataset, language)
-    if not layer.isValid():
-        layer = _open_dataset(dataset, language)
-    return layer
+def _make_dataset(dataset, language: str, timeout_ms: int = _NETWORK_TIMEOUT_MS):
+    with _bounded_network(timeout_ms):
+        problem = _preflight(
+            dataset.url + "?f=json",
+            f"The {dataset.title} dataset",
+            timeout_ms,
+        )
+        if problem:
+            raise OSError(problem)
+        return _open_dataset(dataset, language)
 
 
 def _open_dataset(dataset, language: str):
@@ -509,10 +723,11 @@ def _report(iface, added, errors, group_name: str) -> None:
         bar.pushWarning(
             "Hong Kong Map Services",
             f"Added {group_name}. Could not add {failed}",
+            0,
         )
         return
     if errors:
-        bar.pushCritical("Hong Kong Map Services", "; ".join(errors))
+        bar.pushCritical("Hong Kong Map Services", "; ".join(errors), 0)
         return
     bar.pushSuccess("Hong Kong Map Services", f"Added {group_name}")
 

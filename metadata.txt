@@ -2,13 +2,13 @@
 name=Hong Kong Map Services
 qgisMinimumVersion=3.28
 qgisMaximumVersion=4.99
-description=Add Hong Kong basemaps and datasets, convert coordinates, search places, and compare maps.
-about=Adds a Lands Department imagery, topographic, or vector basemap with optional raster or vector place-name labels. CSDI datasets are added separately, so no second basemap is added. It also converts HK1980 Grid and WGS84 coordinates, shows both coordinate systems under the map cursor, searches for places, and compares layers or groups with Swipe and Split.
-version=1.0.0
+description=Add Hong Kong basemaps and datasets, convert coordinates and GIS files, download files, unzip archives, export the map to SVG, search places, and compare maps.
+about=Adds a Lands Department imagery, topographic, or vector basemap with optional raster or vector place-name labels. CSDI datasets are added separately, so no second basemap is added. It also converts HK1980 Grid and WGS84 coordinates, converts a File Geodatabase or GeoPackage, downloads files named by a URL column, unzips downloaded archives in place, exports the current map to SVG, shows both coordinate systems under the map cursor, searches for places, and compares layers or groups with Swipe and Split.
+version=1.1.0
 author=Curtis Yung
 email=curtisgmailer@gmail.com
 license=GNU General Public License v2 or later
-changelog=1.0.0 - Basemap and dataset actions, imagery topographic and vector basemaps, raster or vector labels, CSDI district, library, fitness room, outdoor fitness equipment, traffic detector, water dispenser, and barbecue site layers, local HK1980 and WGS84 conversion, a cursor readout, location search, one swipe tool with a split mode, dataset links, and coordinate checks.
+changelog=1.1.0 - Download files named by a URL column with resumable partial downloads, unzip downloaded archives in place, convert File Geodatabase and GeoPackage, with optional latitude, longitude, easting, northing, length, and area, and export the current map to an A3 SVG. 1.0.0 - Basemap and dataset actions, imagery topographic and vector basemaps, raster or vector labels, CSDI district, library, fitness room, outdoor fitness equipment, traffic detector, water dispenser, and barbecue site layers, local HK1980 and WGS84 conversion, a cursor readout, location search, one swipe tool with a split mode, dataset links, coordinate checks, QGIS proxy support for vector tiles, and 30-second timeout warnings.
 experimental=False
 deprecated=False
 tags=hong kong,basemap,csdi,landsd,xyz,vector tiles
