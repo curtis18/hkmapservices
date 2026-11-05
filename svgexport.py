@@ -413,10 +413,6 @@ def _render_pictures(canvas, layers, sheet, progress=None):
     try:
         if not _wait_for_render(job, progress):
             raise _Stopped()
-    except _Stopped:
-        raise
-    except Exception:
-        pass
     finally:
         if painter.isActive():
             painter.end()

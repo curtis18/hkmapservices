@@ -314,11 +314,11 @@ def _disposition_name(header: str) -> str:
             value = header[start + len(marker):].split(";", 1)[0].strip().strip('"').strip("'")
             if value:
                 return unquote(value)
-    token = "filename="
-    start = lowered.find(token)
+    filename_parameter = "filename="
+    start = lowered.find(filename_parameter)
     if start < 0:
         return ""
-    value = header[start + len(token):].split(";", 1)[0].strip()
+    value = header[start + len(filename_parameter):].split(";", 1)[0].strip()
     if len(value) >= 2 and value[0] == value[-1] and value[0] in ('"', "'"):
         value = value[1:-1]
     return unquote(value.strip())

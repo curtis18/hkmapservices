@@ -451,9 +451,7 @@ class _WindowClose(QObject):
 
 
 def _close_event():
-    if hasattr(QEvent, "Close"):
-        return QEvent.Close
-    return QEvent.Type.Close
+    return enum_member(QEvent, "Type", "Close")
 
 
 def _load_icon(filename: str) -> QIcon:

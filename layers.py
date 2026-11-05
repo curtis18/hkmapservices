@@ -196,12 +196,14 @@ def _preflight(url: str, label: str, timeout_ms: int = _NETWORK_TIMEOUT_MS) -> s
     elapsed = (time.monotonic() - started) * 1000
     reply = network.reply()
     no_error = enum_member(QNetworkReply, "NetworkError", "NoError")
+    request_error = enum_member(QgsBlockingNetworkRequest, "ErrorCode", "NoError")
+    timeout_error = enum_member(QgsBlockingNetworkRequest, "ErrorCode", "TimeoutError")
     error = reply.error() if reply is not None else no_error
-    if code == QgsBlockingNetworkRequest.TimeoutError or (
+    if code == timeout_error or (
         elapsed >= timeout_ms - 250 and error != no_error
     ):
         return _timeout_message(label, timeout_ms)
-    if code != QgsBlockingNetworkRequest.NoError or error != no_error:
+    if code != request_error or error != no_error:
         detail = network.errorMessage()
         if not detail and reply is not None:
             detail = reply.errorString()

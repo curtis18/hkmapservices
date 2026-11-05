@@ -32,6 +32,11 @@ class DownloadMathTests(unittest.TestCase):
             downloadmath.filename_from_disposition(encoded, "https://example.com/get"),
             "plan sheet.zip",
         )
+        unquoted = "attachment; filename=plain.tif"
+        self.assertEqual(
+            downloadmath.filename_from_disposition(unquoted, "https://example.com/get"),
+            "plain.tif",
+        )
         self.assertEqual(
             downloadmath.filename_from_disposition("", "https://example.com/maps/base.tif"),
             "base.tif",

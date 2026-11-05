@@ -5,6 +5,8 @@ from __future__ import annotations
 from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtWidgets import QFrame, QLabel, QScrollArea
 
+from .compat import enum_member
+
 
 class StatusStrip(QScrollArea):
     """One status line that scrolls sideways when the message is wider than the window."""
@@ -85,9 +87,7 @@ def _scroll_policy(name: str):
 
 
 def _frame_none():
-    if hasattr(QFrame, "NoFrame"):
-        return QFrame.NoFrame
-    return QFrame.Shape.NoFrame
+    return enum_member(QFrame, "Shape", "NoFrame")
 
 
 def _status_background(kind: str) -> str:
