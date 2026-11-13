@@ -72,6 +72,32 @@ class DownloadMathTests(unittest.TestCase):
         )
         self.assertNotIn("0", downloadmath.stopped_message(3, 0))
 
+    def test_ssl_failure_message_names_the_server(self) -> None:
+        message = downloadmath.ssl_failure_message(
+            "https://open.hkmapservice.gov.hk/OpenData/directDownload?productName=x",
+            ["The issuer certificate of a locally looked up certificate could not be found"],
+            39,
+        )
+        self.assertIn("open.hkmapservice.gov.hk", message)
+        self.assertIn("server certificate chain is incomplete or not trusted", message)
+        self.assertIn("39 files were not attempted", message)
+        self.assertTrue(message.startswith("Could not download from open.hkmapservice.gov.hk:"))
+
+    def test_ssl_failure_message_uses_another_host_and_error(self) -> None:
+        message = downloadmath.ssl_failure_message(
+            "https://data.example.gov.hk:8443/files/map.zip",
+            ["The certificate has expired"],
+            1,
+        )
+        self.assertTrue(message.startswith("Could not download from data.example.gov.hk:"))
+        self.assertIn("The certificate has expired", message)
+        self.assertIn("1 file was not attempted", message)
+
+    def test_ssl_failure_message_without_details(self) -> None:
+        message = downloadmath.ssl_failure_message("", [], 0)
+        self.assertIn("Could not download from the server:", message)
+        self.assertNotIn("Download stopped", message)
+
     def test_transfer_choice(self) -> None:
         self.assertEqual(downloadmath.transfer_choice(False, False, False), "start")
         self.assertEqual(downloadmath.transfer_choice(True, True, True), "skip")

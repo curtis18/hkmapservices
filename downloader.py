@@ -32,6 +32,7 @@ from .downloadmath import (
     range_start,
     range_total,
     read_sidecar,
+    ssl_failure_message,
     stopped_message,
     unique_filename,
     write_sidecar,
@@ -69,6 +70,7 @@ class DownloadWorker(QObject):
         failed = 0
         total = len(self._urls)
         folder_index = FolderIndex(self._folder)
+        tls_failures = []
         for index, url in enumerate(self._urls, start=1):
             if self._stop[0]:
                 self.finished.emit(stopped_message(saved, skipped), "warn")
@@ -89,9 +91,15 @@ class DownloadWorker(QObject):
                 total,
                 self._names,
                 folder_index,
+                failures=tls_failures,
             )
             if outcome == "stopped":
                 self.finished.emit(stopped_message(saved, skipped), "warn")
+                return
+            if outcome == "tls_failed":
+                failed_url, ssl_errors = tls_failures[-1] if tls_failures else (url, [])
+                remaining = total - index
+                self.finished.emit(ssl_failure_message(failed_url, ssl_errors, remaining), "error")
                 return
             if outcome == "saved":
                 saved += 1
@@ -180,12 +188,16 @@ def _save_url(
     total: int,
     names: set,
     folder_index=None,
+    failures=None,
 ) -> str:
     if folder_index is None:
         folder_index = FolderIndex(folder)
     probe = _exchange(manager, url, None, None, stop, headers_only=True)
     if stop[0]:
         return "stopped"
+    if probe.get("tls_error"):
+        _record_tls_failure(failures, url, probe.get("ssl_errors"))
+        return "tls_failed"
     if probe["error"]:
         probe = {"length": -1, "ranges": False, "disposition": "", "etag": ""}
     base = filename_from_disposition(probe["disposition"], url)
@@ -246,6 +258,11 @@ def _save_url(
             return "failed"
         if stop[0]:
             return "stopped"
+    if saved.get("tls_error"):
+        if not os.path.isfile(part) or os.path.getsize(part) == 0:
+            discard_part(folder, name)
+        _record_tls_failure(failures, url, saved.get("ssl_errors"))
+        return "tls_failed"
     if saved["timed_out"]:
         progress.emit(f"Download timed out: {name}", "warn")
         return "failed"
@@ -264,6 +281,12 @@ def _save_url(
     discard_sidecar(folder, name)
     folder_index.add(name)
     return "saved"
+
+
+def _record_tls_failure(failures, url: str, ssl_errors) -> None:
+    """Keep the address and SSL details for the one message that stops the batch."""
+    if failures is not None:
+        failures.append((str(url), list(ssl_errors or [])))
 
 
 def _download_plan(
@@ -351,6 +374,7 @@ def _exchange(
         "rewritten": mode == "wb",
         "mismatch": False,
         "timed_out": False,
+        "ssl_errors": [],
         "last": time.monotonic(),
     }
 
@@ -393,6 +417,10 @@ def _exchange(
         elif code == 206:
             wrong_start(range_start(content_range()))
 
+    def on_ssl_errors(errors) -> None:
+        state["last"] = time.monotonic()
+        state["ssl_errors"] = [error.errorString() for error in errors]
+
     def on_ready() -> None:
         state["last"] = time.monotonic()
         if stop[0]:
@@ -427,6 +455,7 @@ def _exchange(
     timer.timeout.connect(on_tick)
     reply.metaDataChanged.connect(on_meta)
     reply.readyRead.connect(on_ready)
+    reply.sslErrors.connect(on_ssl_errors)
     reply.finished.connect(loop.quit)
     timer.start()
     try:
@@ -449,6 +478,9 @@ def _exchange(
         "code": state["code"],
         "mismatch": state["mismatch"],
         "timed_out": state["timed_out"],
+        "ssl_errors": list(state["ssl_errors"]),
+        "tls_error": bool(state["ssl_errors"])
+        or reply.error() == enum_member(QNetworkReply, "NetworkError", "SslHandshakeFailedError"),
     }
     if not headers_only and state["code"] not in (200, 206, None):
         result["error"] = True

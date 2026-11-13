@@ -14,6 +14,12 @@ PART_SUFFIX = ".part"
 SIDECAR_SUFFIX = ".part.json"
 _SIDECAR_APP = "hkmapservices"
 _SIDECAR_FORMAT = 1
+_SSL_CHAIN_HINTS = (
+    "issuer certificate",
+    "unable to verify the first certificate",
+    "no certificates could be verified",
+    "unable to get local issuer",
+)
 
 
 def is_valid_url(value) -> bool:
@@ -103,6 +109,29 @@ def _already_message(skipped: int) -> str:
     if skipped == 1:
         return "1 was already in the folder."
     return f"{skipped} were already in the folder."
+
+
+def ssl_failure_message(url: str, ssl_errors=None, remaining: int = 0) -> str:
+    """Describe a TLS failure that stopped the batch, naming the server."""
+    host = urlparse(str(url)).hostname or "the server"
+    reason = _ssl_reason(ssl_errors)
+    text = f"Could not download from {host}: SSL handshake failed — {reason}."
+    if remaining == 1:
+        text = f"{text} Download stopped; 1 file was not attempted."
+    elif remaining > 1:
+        text = f"{text} Download stopped; {remaining} files were not attempted."
+    return text
+
+
+def _ssl_reason(ssl_errors) -> str:
+    errors = [str(error).strip() for error in (ssl_errors or [])]
+    errors = [error for error in errors if error]
+    if not errors:
+        return "the server certificate chain is incomplete or not trusted"
+    first = errors[0].rstrip(".")
+    if any(hint in first.casefold() for hint in _SSL_CHAIN_HINTS):
+        return "the server certificate chain is incomplete or not trusted"
+    return first
 
 
 def _split_extension(name: str) -> tuple:

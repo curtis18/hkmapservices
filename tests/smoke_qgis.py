@@ -1478,6 +1478,87 @@ def main() -> int:
             downloader_module._IDLE_TIMEOUT_SECONDS = idle_backup
             silent_server.shutdown()
             silent_server.server_close()
+
+        tls_folder = os.path.join(file_dir, "tls-failure")
+        os.makedirs(tls_folder, exist_ok=True)
+        original_exchange = downloader_module._exchange
+        tls_calls = []
+
+        def tls_exchange(*_args, **_kwargs):
+            tls_calls.append(1)
+            return {
+                "error": True,
+                "tls_error": True,
+                "ssl_errors": ["No certificates could be verified"],
+            }
+
+        try:
+            downloader_module._exchange = tls_exchange
+            tls_manager = QNetworkAccessManager()
+            tls_manager.setProxy(QNetworkProxy(no_proxy))
+            tls_url = "https://download.example.gov.hk/maps/sheet.zip"
+            tls_failures = []
+            tls_outcome = downloader_module._save_url(
+                tls_manager,
+                tls_url,
+                tls_folder,
+                [False],
+                _Sink(),
+                1,
+                10,
+                set(),
+                failures=tls_failures,
+            )
+        finally:
+            downloader_module._exchange = original_exchange
+        if tls_outcome != "tls_failed":
+            failures.append(f"TLS failure reported {tls_outcome}")
+        if len(tls_calls) != 1:
+            failures.append(f"TLS failure made {len(tls_calls)} requests")
+        if os.listdir(tls_folder):
+            failures.append("TLS failure left part files behind")
+        if not tls_failures or tls_failures[-1][0] != tls_url:
+            failures.append(f"TLS failure recorded {tls_failures!r}")
+
+        original_save = downloader_module._save_url
+        worker_calls = []
+        worker_messages = []
+
+        def stop_save(_manager, url, *_args, **kwargs):
+            worker_calls.append(url)
+            recorded = kwargs.get("failures")
+            if recorded is not None:
+                recorded.append((url, ["No certificates could be verified"]))
+            return "tls_failed"
+
+        try:
+            downloader_module._save_url = stop_save
+            worker = downloader_module.DownloadWorker(
+                [
+                    "https://download.example.gov.hk/maps/one.zip",
+                    "https://download.example.gov.hk/maps/two.zip",
+                ],
+                tls_folder,
+                [QNetworkProxy(no_proxy), QNetworkProxy(no_proxy)],
+                [False],
+            )
+            worker.finished.connect(lambda text, kind: worker_messages.append((text, kind)))
+            worker.run()
+        finally:
+            downloader_module._save_url = original_save
+        if len(worker_calls) != 1:
+            failures.append(f"TLS failure continued to {len(worker_calls)} URLs")
+        if not worker_messages:
+            failures.append("TLS failure did not report a message")
+        else:
+            text, kind = worker_messages[-1]
+            if (
+                kind != "error"
+                or "download.example.gov.hk" not in text
+                or "1 file was not attempted" not in text
+            ):
+                failures.append(f"TLS failure message is {text!r} ({kind})")
+
         convert_dialog = ConvertDialog()
         convert_dialog._show_status("Processing...", "ok")
         if "#d9f2df" not in convert_dialog._status.styleSheet() or convert_dialog._status.wordWrap():
